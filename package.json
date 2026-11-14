@@ -1,0 +1,17 @@
+{
+  "name": "martian-map-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Martian Map full-stack monorepo for Mission Control Dashboard and Astronaut iPad Tactical Terminal",
+  "scripts": {
+    "dev:shared": "pnpm --filter @martian/shared dev",
+    "dev:web": "pnpm --filter @martian/web dev",
+    "dev:ipad": "pnpm --filter @martian/ipad start",
+    "build": "pnpm -r run build",
+    "mock": "python3 mock_backbone.py"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  }
+}
+
