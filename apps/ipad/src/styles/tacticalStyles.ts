@@ -1,0 +1,173 @@
+import { StyleSheet } from 'react-native';
+
+export const tacticalStyles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#0b0f19',
+  },
+  header: {
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#1f2937',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  title: {
+    color: '#f97316',
+    fontSize: 20,
+    fontWeight: '900',
+    letterSpacing: 1.5,
+  },
+  subtitle: {
+    color: '#9ca3af',
+    fontSize: 12,
+    fontWeight: '600',
+    marginTop: 2,
+  },
+  connBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#374151',
+  },
+  dot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    marginRight: 8,
+  },
+  connText: {
+    color: '#f3f4f6',
+    fontWeight: '700',
+    fontSize: 13,
+  },
+  configBox: {
+    backgroundColor: '#1f2937',
+    padding: 14,
+    marginHorizontal: 16,
+    marginTop: 10,
+    borderRadius: 8,
+  },
+  configTitle: {
+    color: '#f3f4f6',
+    fontSize: 14,
+    fontWeight: 'bold',
+    marginBottom: 8,
+  },
+  input: {
+    flex: 1,
+    backgroundColor: '#111827',
+    borderWidth: 1,
+    borderColor: '#4b5563',
+    borderRadius: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    color: '#f9fafb',
+  },
+  btnSave: {
+    backgroundColor: '#f97316',
+    paddingHorizontal: 16,
+    justifyContent: 'center',
+    borderRadius: 6,
+  },
+  btnText: {
+    color: '#ffffff',
+    fontWeight: 'bold',
+  },
+  riskBanner: {
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    marginHorizontal: 16,
+    marginTop: 12,
+    borderRadius: 10,
+  },
+  riskTitle: {
+    color: '#ffffff',
+    fontSize: 18,
+    fontWeight: '900',
+    letterSpacing: 1,
+  },
+  riskDesc: {
+    color: '#f3f4f6',
+    fontSize: 14,
+    marginTop: 4,
+    fontWeight: '600',
+  },
+  content: {
+    padding: 16,
+  },
+  grid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 14,
+  },
+  bigCard: {
+    flex: 1,
+    minWidth: 180,
+    backgroundColor: '#111827',
+    padding: 22,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: '#374151',
+  },
+  cardLabel: {
+    color: '#9ca3af',
+    fontSize: 13,
+    fontWeight: '800',
+    letterSpacing: 1,
+  },
+  cardValue: {
+    fontSize: 40,
+    fontWeight: '900',
+    marginVertical: 10,
+  },
+  cardSub: {
+    color: '#6b7280',
+    fontSize: 12,
+  },
+  secondarySection: {
+    flexDirection: 'row',
+    gap: 14,
+    marginTop: 14,
+  },
+  panelBox: {
+    flex: 1,
+    backgroundColor: '#111827',
+    padding: 18,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#374151',
+  },
+  panelTitle: {
+    color: '#f97316',
+    fontSize: 14,
+    fontWeight: '800',
+    letterSpacing: 1,
+    marginBottom: 8,
+  },
+  imuRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    marginTop: 10,
+  },
+  imuCol: {
+    alignItems: 'center',
+  },
+  imuLabel: {
+    color: '#9ca3af',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  imuVal: {
+    color: '#f3f4f6',
+    fontSize: 22,
+    fontWeight: '800',
+    marginTop: 4,
+  },
+});
+

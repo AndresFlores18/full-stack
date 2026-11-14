@@ -10,26 +10,109 @@ import base64
 import hashlib
 import json
 import math
+import os
 import random
 import struct
 import sys
 import time
+import zipfile
 
 PORT = 8765
 GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 connected_clients = set()
 
+
+def load_real_d415_frames():
+    """
+    Carga los frames reales de la carpeta data/ (Intel RealSense D415 - sturdy-couscous):
+    1) Prioriza data/sample_10s_d415.zip -> sample_10s_d415/frames.jsonl (22 frames con imágenes base64)
+    2) Si no, usa data/latest_expo_payload.json
+    3) Si no, usa data/latest_drone_cv.json
+    """
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    data_dir = os.path.join(base_dir, "data")
+    frames = []
+
+    zip_path = os.path.join(data_dir, "sample_10s_d415.zip")
+    if os.path.exists(zip_path):
+        try:
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                raw_lines = zf.read("sample_10s_d415/frames.jsonl").decode("utf-8").splitlines()
+                for line in raw_lines:
+                    line = line.strip()
+                    if line:
+                        frames.append(json.loads(line))
+            print(f"📦 [Dataset D415] Cargados {len(frames)} frames reales desde data/sample_10s_d415.zip")
+        except Exception as e:
+            print(f"⚠️  Error leyendo sample_10s_d415.zip: {e}")
+
+    if not frames:
+        for fallback_name in ["latest_expo_payload.json", "latest_drone_cv.json", "drone_cv_1794682184211.json"]:
+            fpath = os.path.join(data_dir, fallback_name)
+            if os.path.exists(fpath):
+                try:
+                    with open(fpath, "r", encoding="utf-8") as f:
+                        frames.append(json.load(f))
+                    print(f"📦 [Dataset D415] Cargado snapshot real desde data/{fallback_name}")
+                    break
+                except Exception as e:
+                    print(f"⚠️  Error leyendo {fallback_name}: {e}")
+
+    return frames
+
+
+REAL_D415_FRAMES = load_real_d415_frames()
+CURRENT_FRAME_INDEX = 0
+
+
+def load_real_map_state():
+    """
+    Carga las matrices del mapa global (occupancy_grid, cost_grid, height_map_m, slope_map_deg)
+    desde apps/web/public/data/real_map_state.json o data/latest_map_state.npz.zip
+    para servirlas por HTTP y WebSocket a cualquier IP externa.
+    """
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    precomputed_path = os.path.join(base_dir, "apps", "web", "public", "data", "real_map_state.json")
+    if os.path.exists(precomputed_path):
+        try:
+            with open(precomputed_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            print("🗺️  [Map Server] Matrices reales (120x80 occupancy_grid + cost_grid) listas para servir")
+            return data
+        except Exception as e:
+            print(f"⚠️  Error leyendo real_map_state.json: {e}")
+    return None
+
+
+REAL_MAP_STATE = load_real_map_state()
+
+
+def send_http_json(writer, obj, status="200 OK"):
+    body = json.dumps(obj).encode("utf-8")
+    headers = (
+        f"HTTP/1.1 {status}\r\n"
+        "Content-Type: application/json; charset=utf-8\r\n"
+        f"Content-Length: {len(body)}\r\n"
+        "Access-Control-Allow-Origin: *\r\n"
+        "Access-Control-Allow-Methods: GET, OPTIONS\r\n"
+        "Access-Control-Allow-Headers: *\r\n"
+        "Connection: close\r\n\r\n"
+    ).encode("latin1")
+    writer.write(headers + body)
+
+
 def create_ws_frame(message: str) -> bytes:
-    payload = message.encode('utf-8')
+    payload = message.encode("utf-8")
     length = len(payload)
     if length <= 125:
-        header = struct.pack('!BB', 0x81, length)
+        header = struct.pack("!BB", 0x81, length)
     elif length <= 65535:
-        header = struct.pack('!BBH', 0x81, 126, length)
+        header = struct.pack("!BBH", 0x81, 126, length)
     else:
-        header = struct.pack('!BBQ', 0x81, 127, length)
+        header = struct.pack("!BBQ", 0x81, 127, length)
     return header + payload
+
 
 async def handle_client(reader, writer):
     request = b""
@@ -38,17 +121,46 @@ async def handle_client(reader, writer):
         request += line
         if line == b"\r\n" or not line:
             break
-    
+
+    req_text = request.decode("latin1", errors="ignore")
+    lines = req_text.split("\r\n")
+    first_line = lines[0] if lines else ""
+    parts = first_line.split(" ")
+    method = parts[0] if len(parts) > 0 else "GET"
+    path = parts[1].split("?")[0] if len(parts) > 1 else "/"
+
     headers = {}
-    for line in request.decode('latin1', errors='ignore').split('\r\n')[1:]:
+    for line in lines[1:]:
         if ": " in line:
             k, v = line.split(": ", 1)
             headers[k.lower()] = v.strip()
 
     key = headers.get("sec-websocket-key")
     if not key:
+        # Es una petición HTTP REST normal desde una IP externa (ej. GET /map_state.json o /latest_expo_payload.json)
+        if method == "OPTIONS":
+            send_http_json(writer, {"ok": True})
+        elif path in ("/map_state.json", "/data/real_map_state.json"):
+            send_http_json(writer, REAL_MAP_STATE or {})
+        elif path in ("/latest_expo_payload.json", "/latest_drone_cv.json", "/"):
+            frame = (
+                REAL_D415_FRAMES[CURRENT_FRAME_INDEX % len(REAL_D415_FRAMES)]
+                if REAL_D415_FRAMES
+                else {"node": "drone_cv", "timestamp": int(time.time()), "data": {}}
+            )
+            payload_out = dict(frame)
+            payload_out["node_id"] = "drone_cv"
+            if REAL_MAP_STATE:
+                payload_out["map_state"] = REAL_MAP_STATE
+            send_http_json(writer, payload_out)
+        else:
+            send_http_json(writer, {"status": "online", "frames": len(REAL_D415_FRAMES), "has_map_state": bool(REAL_MAP_STATE)})
+        await writer.drain()
         writer.close()
-        await writer.wait_closed()
+        try:
+            await writer.wait_closed()
+        except Exception:
+            pass
         return
 
     accept_val = base64.b64encode(hashlib.sha1((key + GUID).encode()).digest()).decode()
@@ -62,8 +174,25 @@ async def handle_client(reader, writer):
     await writer.drain()
 
     addr = writer.get_extra_info('peername')
-    print(f"🛰️  [Backbone Mock] Cliente conectado: {addr}")
+    print(f"🛰️  [Map & Telemetry Server] Cliente WS conectado desde IP: {addr}")
     connected_clients.add(writer)
+
+    # Enviar inmediatamente el primer paquete con map_state completo (120x80 occupancy_grid + cost_grid)
+    if REAL_D415_FRAMES:
+        init_frame = REAL_D415_FRAMES[CURRENT_FRAME_INDEX % len(REAL_D415_FRAMES)]
+        init_packet = {
+            "node": "drone_cv",
+            "node_id": "drone_cv",
+            "timestamp": int(time.time()),
+            "data": init_frame.get("data", {}),
+            "images": init_frame.get("images"),
+            "map_state": REAL_MAP_STATE,
+        }
+        try:
+            writer.write(create_ws_frame(json.dumps(init_packet)))
+            await writer.drain()
+        except Exception:
+            pass
 
     try:
         while True:
@@ -99,10 +228,12 @@ async def handle_client(reader, writer):
             pass
 
 async def telemetry_broadcaster():
+    global CURRENT_FRAME_INDEX
     step = 0
     while True:
         await asyncio.sleep(1.0)
         step += 1
+        CURRENT_FRAME_INDEX = step - 1
         now_sec = int(time.time())
         t = step * 0.1
 
@@ -156,34 +287,40 @@ async def telemetry_broadcaster():
             }
         }
 
-        # 4. Dron Real CV (Raspberry Pi 4 + RealSense D415)
-        # El dron NO se mueve en X/Y; permanece en su plataforma fija [1.8, 5.4] y solo sube en Z, escanea y baja.
-        is_safe = False if (step % 20 > 14) else True
-        drone_z = round(max(0.1, 1.3 + 1.3 * math.sin(t * 0.35)), 2)
-        drone_packet = {
-            "node_id": "drone_cv",
-            "timestamp": now_sec,
-            "payload": {
-                "drone_cv": {
-                    "drone_pos": [
-                        1.8,
-                        5.4,
-                        drone_z
-                    ],
-                    "safe_path": is_safe,
-                    "max_slope_deg": round(12.5 + (10.0 if not is_safe else 2.5 * math.sin(t * 0.3)), 1),
-                    "imu": {
-                        "yaw": round(0.4 + 2 * math.sin(t * 0.1), 1),
-                        "pitch": round(1.1 + 1.5 * math.cos(t * 0.2), 1),
-                        "roll": round(-0.2 + 1.0 * math.sin(t * 0.3), 1)
-                    },
-                    "obstacles": [
-                        {"x": 1.7, "y": 2.0, "radius": 0.30, "severity": "high" if not is_safe else "medium"},
-                        {"x": 2.3, "y": 1.4, "radius": 0.25, "severity": "low"}
-                    ]
+        # 4. Dron Real CV (Raspberry Pi 4 + RealSense D415 desde carpeta data/)
+        if REAL_D415_FRAMES:
+            raw_frame = REAL_D415_FRAMES[(step - 1) % len(REAL_D415_FRAMES)]
+            drone_packet = {
+                "node": "drone_cv",
+                "node_id": "drone_cv",
+                "timestamp": now_sec,
+                "data": raw_frame.get("data", {}),
+                "images": raw_frame.get("images"),
+            }
+        else:
+            is_safe = False if (step % 20 > 14) else True
+            drone_z = round(max(0.1, 1.3 + 1.3 * math.sin(t * 0.35)), 2)
+            drone_packet = {
+                "node": "drone_cv",
+                "node_id": "drone_cv",
+                "timestamp": now_sec,
+                "payload": {
+                    "drone_cv": {
+                        "drone_pos": [1.8, 5.4, drone_z],
+                        "safe_path": is_safe,
+                        "max_slope_deg": round(12.5 + (10.0 if not is_safe else 2.5 * math.sin(t * 0.3)), 1),
+                        "imu": {
+                            "yaw": round(0.4 + 2 * math.sin(t * 0.1), 1),
+                            "pitch": round(1.1 + 1.5 * math.cos(t * 0.2), 1),
+                            "roll": round(-0.2 + 1.0 * math.sin(t * 0.3), 1)
+                        },
+                        "obstacles": [
+                            {"x": 1.7, "y": 2.0, "radius": 0.30, "severity": "high" if not is_safe else "medium"},
+                            {"x": 2.3, "y": 1.4, "radius": 0.25, "severity": "low"}
+                        ]
+                    }
                 }
             }
-        }
 
         if connected_clients:
             for packet in [sat_packet, station_packet, eva_packet, drone_packet]:
