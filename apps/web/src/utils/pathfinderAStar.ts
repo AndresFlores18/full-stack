@@ -66,7 +66,10 @@ export function computeSafeRouteFromImageVision(
     };
   }
 
-  const start = snapToNearestSafeTerrain(rawStart, vision);
+  // El inicio siempre sale exacto de la posición real (EVA/Base): no se ajusta aunque
+  // esa celda tenga riesgo, para que la línea de la ruta se vea saliendo del astronauta.
+  // El destino sí se ajusta a la celda segura más cercana si el clic cae sobre una zona de peligro.
+  const start = rawStart;
   const goal = snapToNearestSafeTerrain(rawGoal, vision);
 
   const toGrid = (xm: number, ym: number): [number, number] => [

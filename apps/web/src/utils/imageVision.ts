@@ -240,7 +240,7 @@ export function analyzeImageTerrainReal(
     elevationGrid,
     slopeGrid,
     costGrid,
-    detectedObstacles,
+    detectedObstacles: clusterObstacles(detectedObstacles),
     isLineMap,
   };
 }
@@ -336,9 +336,30 @@ export function fuseVisionWithD415Data(
     elevationGrid,
     slopeGrid,
     costGrid,
-    detectedObstacles,
+    detectedObstacles: clusterObstacles(detectedObstacles),
     isLineMap: baseVisionData.isLineMap,
   };
+}
+
+/**
+ * Agrupa detecciones de riesgo muy cercanas entre sí en una sola (la de mayor pendiente),
+ * para que un mismo cráter/grieta no se dibuje como un racimo de círculos pegados.
+ */
+function clusterObstacles(
+  obstacles: DetectedTerrainObstacle[],
+  minSeparationMeters: number = 0.55
+): DetectedTerrainObstacle[] {
+  const sorted = [...obstacles].sort((a, b) => b.slopeDeg - a.slopeDeg);
+  const accepted: DetectedTerrainObstacle[] = [];
+
+  for (const candidate of sorted) {
+    const tooClose = accepted.some(
+      (a) => Math.hypot(a.x - candidate.x, a.y - candidate.y) < minSeparationMeters
+    );
+    if (!tooClose) accepted.push(candidate);
+  }
+
+  return accepted;
 }
 
 export function sampleMatrixAt(

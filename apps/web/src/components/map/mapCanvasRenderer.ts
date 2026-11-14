@@ -349,10 +349,11 @@ export function renderTopographicMapCanvas(params: MapCanvasRenderParams): void 
       if (idx === 0) ctx.moveTo(px, py);
       else ctx.lineTo(px, py);
     });
-    ctx.strokeStyle = 'rgba(0, 0, 0, 0.70)';
-    ctx.lineWidth = 9;
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.55)';
+    ctx.lineWidth = 7;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
+    ctx.setLineDash([9, 7]);
     ctx.stroke();
 
     ctx.beginPath();
@@ -363,8 +364,10 @@ export function renderTopographicMapCanvas(params: MapCanvasRenderParams): void 
       else ctx.lineTo(px, py);
     });
     ctx.strokeStyle = '#22c55e';
-    ctx.lineWidth = 4;
+    ctx.lineWidth = 3.5;
+    ctx.setLineDash([9, 7]);
     ctx.stroke();
+    ctx.setLineDash([]);
 
     safeRoute.points.forEach(([rx, ry], idx) => {
       if (idx % 4 !== 0 || idx === 0 || idx === safeRoute.points.length - 1) return;
@@ -480,21 +483,31 @@ export function renderTopographicMapCanvas(params: MapCanvasRenderParams): void 
   const endPt = safeRoute.points[safeRoute.points.length - 1] ?? targetPoint;
   const targetPx = (endPt[0] / dataset.widthMeters) * width;
   const targetPy = (endPt[1] / dataset.heightMeters) * height;
-  ctx.save();
-  ctx.beginPath();
-  ctx.arc(targetPx, targetPy, 12, 0, Math.PI * 2);
-  ctx.fillStyle = 'rgba(34, 197, 94, 0.28)';
-  ctx.fill();
-  ctx.strokeStyle = '#22c55e';
-  ctx.lineWidth = 2.5;
-  ctx.stroke();
 
+  // Pin de ubicación (como un marcador de mapa): la punta de abajo señala el punto exacto.
+  ctx.save();
+  const pinR = 6.5;
+  const pinCy = targetPy - pinR * 1.9;
   ctx.beginPath();
-  ctx.arc(targetPx, targetPy, 5, 0, Math.PI * 2);
+  ctx.moveTo(targetPx - pinR * 0.86, pinCy + pinR * 0.5);
+  ctx.lineTo(targetPx, targetPy);
+  ctx.lineTo(targetPx + pinR * 0.86, pinCy + pinR * 0.5);
+  ctx.closePath();
   ctx.fillStyle = '#22c55e';
   ctx.fill();
+  ctx.beginPath();
+  ctx.arc(targetPx, pinCy, pinR, 0, Math.PI * 2);
+  ctx.fillStyle = '#22c55e';
+  ctx.fill();
+  ctx.strokeStyle = '#0b1220';
+  ctx.lineWidth = 1.3;
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(targetPx, pinCy, pinR * 0.42, 0, Math.PI * 2);
+  ctx.fillStyle = '#ffffff';
+  ctx.fill();
   ctx.restore();
-  drawBadge(targetPx, targetPy, `META [${endPt[0]}, ${endPt[1]}]`, '#4ade80', 0, 'target');
+  drawBadge(targetPx, pinCy - pinR, `META [${endPt[0]}, ${endPt[1]}]`, '#4ade80', 0, 'target');
 
   const basePx = (basePos[0] / dataset.widthMeters) * width;
   const basePy = (basePos[1] / dataset.heightMeters) * height;

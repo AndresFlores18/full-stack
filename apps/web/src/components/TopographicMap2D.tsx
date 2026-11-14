@@ -1,5 +1,17 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, CheckCircle2, Eye, HeartPulse, TrendingUp, Upload } from 'lucide-react';
+import {
+  AlertTriangle,
+  BatteryWarning,
+  CheckCircle2,
+  Eye,
+  LucideIcon,
+  Mountain,
+  Radiation,
+  TrendingUp,
+  TriangleAlert,
+  Upload,
+  Wind,
+} from 'lucide-react';
 import { DroneData, EvaData, RealMapStatePayload, RiskAssessment } from '@martian/shared';
 import {
   analyzeImageTerrainReal,
@@ -256,6 +268,31 @@ const BatteryIcon: React.FC<{ level: number }> = ({ level }) => {
     </svg>
   );
 };
+
+// lucide-react no trae un ícono de astronauta, así que dibujamos uno simple a mano
+// (casco + visor + torso) para el botón que abre la telemetría del traje.
+const AstronautIcon: React.FC<{ size?: number; color: string }> = ({ size = 18, color }) => (
+  <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="8.3" r="4.8" />
+    <ellipse cx="12" cy="8.6" rx="2.7" ry="2.2" fill={color} fillOpacity="0.28" stroke={color} strokeWidth="1.1" />
+    <path d="M6.4 14.2c0-1 .9-1.7 2-2a9 9 0 0 1 7.2 0c1.1.3 2 1 2 2V19.5H6.4v-5.3Z" />
+    <line x1="6.4" y1="15.8" x2="4.6" y2="16.5" />
+    <line x1="17.6" y1="15.8" x2="19.4" y2="16.5" />
+  </svg>
+);
+
+// Ícono decorativo según el tipo de riesgo detectado, a partir de palabras clave del texto.
+function pickRiskIcon(text: string): LucideIcon {
+  const t = text.toUpperCase();
+  if (t.includes('RADIACI')) return Radiation;
+  if (t.includes('O2') || t.includes('OXÍGENO') || t.includes('OXIGENO')) return Wind;
+  if (t.includes('BATER')) return BatteryWarning;
+  if (t.includes('PENDIENTE') || t.includes('CRÁTER') || t.includes('CRATER')) return Mountain;
+  if (t.includes('RUTA') || t.includes('BLOQUEA') || t.includes('INSEGURA') || t.includes('OBSTÁCULO') || t.includes('OBSTACULO')) {
+    return TriangleAlert;
+  }
+  return AlertTriangle;
+}
 
 /**
  * Mapa Táctico 2D alimentado por `data/` y el Servidor IP (RealSense D415):
@@ -704,7 +741,7 @@ export const TopographicMap2D: React.FC<TopographicMap2DProps> = ({
                 padding: 0,
               }}
             >
-              <HeartPulse size={18} color={showTelemetry ? '#ffffff' : '#0c4a6e'} />
+              <AstronautIcon size={18} color={showTelemetry ? '#ffffff' : '#0c4a6e'} />
             </button>
 
             {/* Ícono Ojo: recorre rápidamente las 4 vistas de capa real del mapa */}
@@ -802,24 +839,30 @@ export const TopographicMap2D: React.FC<TopographicMap2DProps> = ({
                 }
               `}</style>
               <div style={{ padding: '8px', display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '220px', overflowY: 'auto' }}>
-                {riskCards.map((c, i) => (
-                  <div
-                    key={i}
-                    style={{
-                      background: c.level === 'red' ? '#7f1d1d' : c.level === 'yellow' ? '#78350f' : '#14532d',
-                      border: `1px solid ${SEVERITY_COLOR[c.level]}`,
-                      borderRadius: '6px',
-                      padding: '8px 10px',
-                      fontSize: '11px',
-                    }}
-                  >
-                    <div style={{ fontWeight: 'bold', marginBottom: '3px', display: 'flex', alignItems: 'center', gap: '7px' }}>
-                      <StatusDot level={c.level} />
-                      {c.title}
+                {riskCards.map((c, i) => {
+                  const RiskIcon = pickRiskIcon(c.text);
+                  return (
+                    <div
+                      key={i}
+                      style={{
+                        background: c.level === 'red' ? '#7f1d1d' : c.level === 'yellow' ? '#78350f' : '#14532d',
+                        border: `1px solid ${SEVERITY_COLOR[c.level]}`,
+                        borderRadius: '6px',
+                        padding: '8px 10px',
+                        fontSize: '11px',
+                      }}
+                    >
+                      <div style={{ fontWeight: 'bold', marginBottom: '3px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '7px' }}>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
+                          <StatusDot level={c.level} />
+                          {c.title}
+                        </span>
+                        <RiskIcon size={14} color={SEVERITY_COLOR[c.level]} />
+                      </div>
+                      <div style={{ color: '#e5e7eb' }}>{c.text}</div>
                     </div>
-                    <div style={{ color: '#e5e7eb' }}>{c.text}</div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
 
