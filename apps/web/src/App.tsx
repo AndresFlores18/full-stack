@@ -7,7 +7,6 @@ import {
 } from '@martian/shared';
 import { buildTopographicDataset, CONNECTION_MODES, OperationMode } from './config/connectionConfig';
 import { TopographicMap2D } from './components/TopographicMap2D';
-import { MissionHeader } from './components/MissionHeader';
 
 export default function App() {
   const { isConnected, getEva, getDrone, ingestEnvelope } = useBackbone();
@@ -58,35 +57,27 @@ export default function App() {
   return (
     <div
       style={{
-        padding: '20px',
-        fontFamily: 'monospace',
+        padding: '18px 20px',
+        fontFamily: '"Inter", "Segoe UI", system-ui, -apple-system, sans-serif',
         color: '#f3f4f6',
-        maxWidth: '1440px',
+        maxWidth: '1360px',
         margin: '0 auto',
       }}
     >
-      <MissionHeader
+      <TopographicMap2D
+        dataset={terrainDataset}
+        droneData={activeDroneSource as any}
         mode={mode}
+        evaYaw={eva?.data?.imu?.yaw ?? 0}
+        eva={eva?.data ?? null}
+        risk={risk}
+        utcTime={utcTime}
         isConnected={isConnected}
         customUrls={customUrls}
-        utcTime={utcTime}
         onSwitchMode={handleSwitchMode}
         onChangeUrl={(newUrl) => setCustomUrls({ ...customUrls, [mode]: newUrl })}
         onApplyUrl={handleApplyUrl}
       />
-
-      {/* El mapa incluye su propio panel interno de Obstáculos & Pendientes (reemplaza el banner de riesgo)
-          y de Elevación, por eso ocupa todo el ancho. */}
-      <div style={{ marginBottom: '16px' }}>
-        <TopographicMap2D
-          dataset={terrainDataset}
-          droneData={activeDroneSource as any}
-          mode={mode}
-          evaYaw={eva?.data?.imu?.yaw ?? 0}
-          eva={eva?.data ?? null}
-          risk={risk}
-        />
-      </div>
     </div>
   );
 }

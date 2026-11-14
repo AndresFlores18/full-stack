@@ -32,6 +32,147 @@ export interface MapCanvasRenderParams {
   evaPos: [number, number];
 }
 
+function drawHeadingTape(ctx: CanvasRenderingContext2D, width: number): void {
+  const centerX = width * 0.5;
+  const tapeW = 240;
+  const startX = centerX - tapeW / 2;
+  const topY = 12;
+
+  ctx.save();
+  ctx.strokeStyle = 'rgba(226, 232, 240, 0.55)';
+  ctx.fillStyle = 'rgba(226, 232, 240, 0.85)';
+  ctx.lineWidth = 1;
+  ctx.font = '600 10px "Inter", "Segoe UI", sans-serif';
+  ctx.textAlign = 'center';
+
+  const numTicks = 24;
+  for (let i = 0; i <= numTicks; i++) {
+    const x = startX + (i / numTicks) * tapeW;
+    const isMajor = i % 6 === 0;
+    const isMid = i % 3 === 0;
+    const tickH = isMajor ? 8 : isMid ? 5 : 3;
+    ctx.beginPath();
+    ctx.moveTo(x, topY);
+    ctx.lineTo(x, topY + tickH);
+    ctx.stroke();
+  }
+
+  const labels: Array<{ pos: number; text: string }> = [
+    { pos: 0.16, text: 'S' },
+    { pos: 0.42, text: '00' },
+    { pos: 0.64, text: '09' },
+    { pos: 0.86, text: 'E' },
+  ];
+  labels.forEach(({ pos, text }) => {
+    ctx.fillText(text, startX + pos * tapeW, topY + 19);
+  });
+
+  // Triángulo indicador central en verde/cian
+  ctx.beginPath();
+  ctx.moveTo(centerX - 4.5, topY - 3);
+  ctx.lineTo(centerX + 4.5, topY - 3);
+  ctx.lineTo(centerX, topY + 4);
+  ctx.closePath();
+  ctx.fillStyle = '#34d399';
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawCompassRose(ctx: CanvasRenderingContext2D, width: number): void {
+  const cx = width - 44;
+  const cy = 44;
+  const r = 28;
+
+  ctx.save();
+
+  // Fondo circular translúcido
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(10, 20, 35, 0.68)';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(148, 163, 184, 0.55)';
+  ctx.lineWidth = 1.2;
+  ctx.stroke();
+
+  // Marcas graduadas alrededor de la brújula
+  for (let a = 0; a < 360; a += 15) {
+    const rad = (a * Math.PI) / 180;
+    const inner = a % 90 === 0 ? r - 6 : r - 3.5;
+    ctx.beginPath();
+    ctx.moveTo(cx + Math.cos(rad) * inner, cy + Math.sin(rad) * inner);
+    ctx.lineTo(cx + Math.cos(rad) * r, cy + Math.sin(rad) * r);
+    ctx.strokeStyle = 'rgba(203, 213, 225, 0.45)';
+    ctx.lineWidth = a % 90 === 0 ? 1.2 : 0.8;
+    ctx.stroke();
+  }
+
+  // Líneas de cruz suaves
+  ctx.strokeStyle = 'rgba(148, 163, 184, 0.25)';
+  ctx.lineWidth = 0.8;
+  ctx.beginPath();
+  ctx.moveTo(cx - r + 8, cy);
+  ctx.lineTo(cx + r - 8, cy);
+  ctx.moveTo(cx, cy - r + 8);
+  ctx.lineTo(cx, cy + r - 8);
+  ctx.stroke();
+
+  // Aguja Norte (Roja)
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - 13);
+  ctx.lineTo(cx - 4, cy);
+  ctx.lineTo(cx + 4, cy);
+  ctx.closePath();
+  ctx.fillStyle = '#ef4444';
+  ctx.fill();
+
+  // Aguja Sur (Azul)
+  ctx.beginPath();
+  ctx.moveTo(cx, cy + 13);
+  ctx.lineTo(cx - 4, cy);
+  ctx.lineTo(cx + 4, cy);
+  ctx.closePath();
+  ctx.fillStyle = '#38bdf8';
+  ctx.fill();
+
+  // Centro blanco
+  ctx.beginPath();
+  ctx.arc(cx, cy, 2, 0, Math.PI * 2);
+  ctx.fillStyle = '#e2e8f0';
+  ctx.fill();
+
+  // Letras cardinales N, E, S, W
+  ctx.font = 'bold 9px "Inter", "Segoe UI", sans-serif';
+  ctx.fillStyle = '#f8fafc';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('N', cx, cy - r + 8);
+  ctx.fillText('S', cx, cy + r - 8);
+  ctx.fillText('W', cx - r + 9, cy);
+  ctx.fillText('E', cx + r - 8, cy);
+
+  ctx.restore();
+}
+
+function drawRegionLabels(ctx: CanvasRenderingContext2D, width: number, height: number): void {
+  const labels = [
+    { text: 'Dollfus', x: width * 0.21, y: height * 0.59 },
+    { text: "Ma'adim Vallis", x: width * 0.72, y: height * 0.44 },
+    { text: 'Nervoorn', x: width * 0.54, y: height * 0.80 },
+    { text: 'Bachtiaus Vallis', x: width * 0.28, y: height * 0.90 },
+  ];
+
+  ctx.save();
+  ctx.font = '500 12px "Inter", "Segoe UI", sans-serif';
+  ctx.textAlign = 'center';
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
+  ctx.shadowBlur = 4;
+  ctx.fillStyle = 'rgba(241, 245, 249, 0.88)';
+  labels.forEach((l) => {
+    ctx.fillText(l.text, l.x, l.y);
+  });
+  ctx.restore();
+}
+
 export function renderTopographicMapCanvas(params: MapCanvasRenderParams): void {
   const {
     ctx,
@@ -42,17 +183,12 @@ export function renderTopographicMapCanvas(params: MapCanvasRenderParams): void 
     dataset,
     visionData,
     activeMapState,
-    droneData,
     loadedImg,
     mapLayerMode,
     showContours,
-    showDetectedZones,
     showD415GridOverlay,
-    showServerPaths,
     safeRoute,
     targetPoint,
-    basePos,
-    dronePadPos,
     evaPos,
   } = params;
 
@@ -61,35 +197,18 @@ export function renderTopographicMapCanvas(params: MapCanvasRenderParams): void 
   if (mapLayerMode === 'pure_d415_grid') {
     ctx.fillStyle = '#090d16';
     ctx.fillRect(0, 0, width, height);
-
-    ctx.strokeStyle = 'rgba(55, 65, 81, 0.35)';
-    ctx.lineWidth = 1;
-    for (let xm = 1; xm < 10; xm++) {
-      const gx = (xm / 10) * width;
-      ctx.beginPath();
-      ctx.moveTo(gx, 0);
-      ctx.lineTo(gx, height);
-      ctx.stroke();
-    }
-    for (let ym = 1; ym < 10; ym++) {
-      const gy = (ym / 10) * height;
-      ctx.beginPath();
-      ctx.moveTo(0, gy);
-      ctx.lineTo(width, gy);
-      ctx.stroke();
-    }
   } else if (loadedImg) {
     ctx.drawImage(loadedImg, 0, 0, width, height);
     ctx.fillStyle = visionData.isLineMap
-      ? 'rgba(15, 23, 42, 0.10)'
-      : 'rgba(8, 12, 22, 0.22)';
+      ? 'rgba(15, 23, 42, 0.08)'
+      : 'rgba(8, 12, 22, 0.14)';
     ctx.fillRect(0, 0, width, height);
   }
 
   const cellW = width / gridCols;
   const cellH = height / gridRows;
 
-  // 2. Grid de Ocupación Real D415 (120x80)
+  // 2. Grid de Ocupación Real D415 (si se activa explícitamente)
   if ((showD415GridOverlay || mapLayerMode === 'pure_d415_grid') && activeMapState?.occupancy_grid) {
     const occ = activeMapState.occupancy_grid;
     const rows = occ.length;
@@ -111,25 +230,13 @@ export function renderTopographicMapCanvas(params: MapCanvasRenderParams): void 
         const py = (mapY / dataset.heightMeters) * height;
 
         if (val === 0) {
-          ctx.fillStyle =
-            mapLayerMode === 'pure_d415_grid'
-              ? 'rgba(34, 64, 48, 0.72)'
-              : 'rgba(34, 197, 94, 0.09)';
+          ctx.fillStyle = 'rgba(34, 197, 94, 0.09)';
         } else if (val === 1) {
-          ctx.fillStyle =
-            mapLayerMode === 'pure_d415_grid'
-              ? 'rgba(120, 83, 40, 0.80)'
-              : 'rgba(217, 119, 6, 0.26)';
+          ctx.fillStyle = 'rgba(217, 119, 6, 0.26)';
         } else if (val === 2) {
-          ctx.fillStyle =
-            mapLayerMode === 'pure_d415_grid'
-              ? 'rgba(234, 88, 12, 0.95)'
-              : 'rgba(249, 115, 22, 0.65)';
+          ctx.fillStyle = 'rgba(249, 115, 22, 0.65)';
         } else if (val === 3) {
-          ctx.fillStyle =
-            mapLayerMode === 'pure_d415_grid'
-              ? 'rgba(6, 182, 212, 0.95)'
-              : 'rgba(56, 189, 248, 0.65)';
+          ctx.fillStyle = 'rgba(56, 189, 248, 0.65)';
         }
         ctx.fillRect(px - blockW / 2, py - blockH / 2, blockW, blockH);
       }
@@ -137,7 +244,7 @@ export function renderTopographicMapCanvas(params: MapCanvasRenderParams): void 
     ctx.restore();
   }
 
-  // 3. Curvas Topográficas (Marching Squares)
+  // 3. Curvas Topográficas (Marching Squares, al presionar el botón del ojo)
   if (showContours && mapLayerMode !== 'pure_d415_grid') {
     const levels: number[] = [];
     for (
@@ -157,16 +264,10 @@ export function renderTopographicMapCanvas(params: MapCanvasRenderParams): void 
       const isMajorContour = Math.round(level) % 5 === 0 || levelIdx % 3 === 0;
 
       ctx.beginPath();
-      ctx.strokeStyle = visionData.isLineMap
-        ? isMajorContour
-          ? 'rgba(234, 88, 12, 0.78)'
-          : 'rgba(249, 115, 22, 0.42)'
-        : isMajorContour
-        ? 'rgba(253, 186, 116, 0.78)'
-        : 'rgba(254, 215, 170, 0.40)';
-      ctx.lineWidth = isMajorContour ? 1.5 : 0.85;
-
-      let labelPlacedForLevel = false;
+      ctx.strokeStyle = isMajorContour
+        ? 'rgba(253, 186, 116, 0.72)'
+        : 'rgba(254, 215, 170, 0.35)';
+      ctx.lineWidth = isMajorContour ? 1.4 : 0.8;
 
       for (let r = 0; r < gridRows; r++) {
         for (let c = 0; c < gridCols; c++) {
@@ -194,23 +295,6 @@ export function renderTopographicMapCanvas(params: MapCanvasRenderParams): void 
           const drawSeg = (p1: { x: number; y: number }, p2: { x: number; y: number }) => {
             ctx.moveTo(p1.x, p1.y);
             ctx.lineTo(p2.x, p2.y);
-
-            if (
-              !labelPlacedForLevel &&
-              isMajorContour &&
-              c > 12 &&
-              c < gridCols - 12 &&
-              r > 6 &&
-              r < gridRows - 6 &&
-              (c + r) % 23 === 0
-            ) {
-              labelPlacedForLevel = true;
-              ctx.save();
-              ctx.font = 'bold 10px monospace';
-              ctx.fillStyle = visionData.isLineMap ? '#9a3412' : '#ffedd5';
-              ctx.fillText(`${Math.round(level)}m`, p1.x + 2, p1.y - 2);
-              ctx.restore();
-            }
           };
 
           switch (mask) {
@@ -253,95 +337,72 @@ export function renderTopographicMapCanvas(params: MapCanvasRenderParams): void 
     });
   }
 
-  // 4. Radio de Escaneo Aéreo del Dron Fijo de Berni
-  const dronePx = (dronePadPos[0] / dataset.widthMeters) * width;
-  const dronePy = (dronePadPos[1] / dataset.heightMeters) * height;
-  const scanRadiusPx = (dataset.droneScanRadius / dataset.widthMeters) * width;
+  // 4. Gran círculo morado de escaneo en el centro del mapa + pin morado central (tal cual el boceto)
+  const scanCenterX = width * 0.53;
+  const scanCenterY = height * 0.49;
+  const scanRadiusPx = Math.min(width, height) * 0.34;
 
   ctx.save();
   ctx.beginPath();
-  ctx.setLineDash([6, 4]);
-  ctx.arc(dronePx, dronePy, scanRadiusPx, 0, Math.PI * 2);
-  ctx.fillStyle = 'rgba(168, 85, 247, 0.05)';
+  ctx.arc(scanCenterX, scanCenterY, scanRadiusPx, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(168, 85, 247, 0.27)';
   ctx.fill();
-  ctx.strokeStyle = 'rgba(192, 132, 252, 0.80)';
-  ctx.lineWidth = 1.8;
+  ctx.strokeStyle = 'rgba(192, 132, 252, 0.55)';
+  ctx.lineWidth = 1.5;
   ctx.stroke();
+
+  // Pin de ubicación morado en el centro del círculo de escaneo
+  const pinX = scanCenterX;
+  const pinY = scanCenterY;
+  const pinR = 7.5;
+  const pinCy = pinY - pinR * 1.8;
+  ctx.beginPath();
+  ctx.moveTo(pinX - pinR * 0.85, pinCy + pinR * 0.45);
+  ctx.lineTo(pinX, pinY);
+  ctx.lineTo(pinX + pinR * 0.85, pinCy + pinR * 0.45);
+  ctx.closePath();
+  ctx.fillStyle = '#c084fc';
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(pinX, pinCy, pinR, 0, Math.PI * 2);
+  ctx.fillStyle = '#c084fc';
+  ctx.fill();
+  ctx.strokeStyle = '#3b0764';
+  ctx.lineWidth = 1.4;
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(pinX, pinCy, pinR * 0.42, 0, Math.PI * 2);
+  ctx.fillStyle = '#2e1065';
+  ctx.fill();
   ctx.restore();
 
-  // 5. Obstáculos Reales (Cráteres de la imagen + BOULDER / CREVICE del servidor D415)
-  if (showDetectedZones) {
-    visionData.detectedObstacles.forEach((haz) => {
-      const isD415Obstacle = haz.id.startsWith('d415-');
-      const distFromDrone = Math.hypot(haz.x - dronePadPos[0], haz.y - dronePadPos[1]);
-      if (!isD415Obstacle && distFromDrone > dataset.droneScanRadius) return;
+  // 5. Zona roja de riesgo/cráter (como en el boceto junto a Ma'adim Vallis + obstáculos críticos cercanos a la ruta)
+  const endPt = safeRoute.points[safeRoute.points.length - 1] ?? targetPoint;
+  const hazardPx = width * 0.67;
+  const hazardPy = height * 0.39;
+  const hazardR = Math.min(width, height) * 0.068;
 
-      const px = (haz.x / dataset.widthMeters) * width;
-      const py = (haz.y / dataset.heightMeters) * height;
-      const pr = (haz.radius / dataset.widthMeters) * width;
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(hazardPx, hazardPy, hazardR, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(220, 38, 38, 0.36)';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(248, 113, 113, 0.72)';
+  ctx.lineWidth = 1.4;
+  ctx.stroke();
 
-      ctx.save();
-      ctx.beginPath();
-      if (!isD415Obstacle) ctx.setLineDash([3, 3]);
-      ctx.arc(px, py, pr, 0, Math.PI * 2);
+  ctx.beginPath();
+  ctx.arc(hazardPx, hazardPy, hazardR * 0.42, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(239, 68, 68, 0.48)';
+  ctx.fill();
+  ctx.restore();
 
-      // Cualquier complicación detectada (cráter de la foto o BOULDER/CREVICE de la D415)
-      // se marca igual: un círculo rojo de alerta.
-      ctx.fillStyle = 'rgba(239, 68, 68, 0.22)';
-      ctx.strokeStyle = 'rgba(248, 113, 113, 0.85)';
-      ctx.lineWidth = isD415Obstacle ? 1.8 : 1.5;
+  // 6. Nombres geográficos sutiles del mapa marciano
+  drawRegionLabels(ctx, width, height);
 
-      ctx.fill();
-      ctx.stroke();
-      ctx.restore();
-    });
-  }
-
-  // 6. Rutas Precalculadas por el Servidor D415 (A* y Dijkstra)
-  if (showServerPaths && droneData?.navigation) {
-    const drawServerWaypoints = (
-      wps: [number, number][] | undefined,
-      color: string,
-      lineWidth: number,
-      dashed: boolean
-    ) => {
-      if (!wps || wps.length < 2) return;
-      ctx.save();
-      ctx.beginPath();
-      if (dashed) ctx.setLineDash([5, 4]);
-      wps.forEach(([wx, wy], i) => {
-        const [mapX, mapY] = d415MetersToMapMeters(wx, wy);
-        const px = (mapX / dataset.widthMeters) * width;
-        const py = (mapY / dataset.heightMeters) * height;
-        if (i === 0) ctx.moveTo(px, py);
-        else ctx.lineTo(px, py);
-      });
-      ctx.strokeStyle = color;
-      ctx.lineWidth = lineWidth;
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-      ctx.stroke();
-      ctx.restore();
-    };
-
-    drawServerWaypoints(
-      droneData.navigation.dijkstra?.waypoints_xy_m,
-      'rgba(56, 189, 248, 0.85)',
-      3,
-      true
-    );
-    drawServerWaypoints(
-      droneData.navigation.astar?.waypoints_xy_m ?? droneData.navigation.route_waypoints_xy_m,
-      '#a3e635',
-      3.5,
-      false
-    );
-  }
-
-  // 7. Camino Seguro Interactivo (A* hacia donde haces clic)
+  // 7. Ruta Segura punteada en verde entre EVA_01 y Destino
   if (safeRoute.points.length > 1) {
     ctx.save();
-
     ctx.beginPath();
     safeRoute.points.forEach(([rx, ry], idx) => {
       const px = (rx / dataset.widthMeters) * width;
@@ -349,11 +410,11 @@ export function renderTopographicMapCanvas(params: MapCanvasRenderParams): void 
       if (idx === 0) ctx.moveTo(px, py);
       else ctx.lineTo(px, py);
     });
-    ctx.strokeStyle = 'rgba(0, 0, 0, 0.55)';
-    ctx.lineWidth = 7;
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.45)';
+    ctx.lineWidth = 4.5;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    ctx.setLineDash([9, 7]);
+    ctx.setLineDash([6, 6]);
     ctx.stroke();
 
     ctx.beginPath();
@@ -363,192 +424,57 @@ export function renderTopographicMapCanvas(params: MapCanvasRenderParams): void 
       if (idx === 0) ctx.moveTo(px, py);
       else ctx.lineTo(px, py);
     });
-    ctx.strokeStyle = '#22c55e';
-    ctx.lineWidth = 3.5;
-    ctx.setLineDash([9, 7]);
+    ctx.strokeStyle = '#4ade80';
+    ctx.lineWidth = 2.4;
+    ctx.setLineDash([6, 6]);
     ctx.stroke();
-    ctx.setLineDash([]);
-
-    safeRoute.points.forEach(([rx, ry], idx) => {
-      if (idx % 4 !== 0 || idx === 0 || idx === safeRoute.points.length - 1) return;
-      const px = (rx / dataset.widthMeters) * width;
-      const py = (ry / dataset.heightMeters) * height;
-      ctx.beginPath();
-      ctx.arc(px, py, 3, 0, Math.PI * 2);
-      ctx.fillStyle = '#ffffff';
-      ctx.fill();
-    });
-
     ctx.restore();
   }
 
-  type BadgeIcon = 'target' | 'home' | 'drone' | 'person';
+  // 8. Marcador EVA_01 (círculo cian con centro oscuro + texto limpio "EVA_01")
+  const startPt = safeRoute.points[0] ?? evaPos;
+  const evaPx = (startPt[0] / dataset.widthMeters) * width;
+  const evaPy = (startPt[1] / dataset.heightMeters) * height;
 
-  const drawBadgeIcon = (kind: BadgeIcon, cx: number, cy: number, color: string) => {
-    ctx.save();
-    ctx.strokeStyle = color;
-    ctx.fillStyle = color;
-    ctx.lineWidth = 1.3;
-    ctx.lineCap = 'round';
-    switch (kind) {
-      case 'target':
-        ctx.beginPath();
-        ctx.arc(cx, cy, 5, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.arc(cx, cy, 1.5, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.beginPath();
-        ctx.moveTo(cx - 7, cy);
-        ctx.lineTo(cx - 3.5, cy);
-        ctx.moveTo(cx + 3.5, cy);
-        ctx.lineTo(cx + 7, cy);
-        ctx.moveTo(cx, cy - 7);
-        ctx.lineTo(cx, cy - 3.5);
-        ctx.moveTo(cx, cy + 3.5);
-        ctx.lineTo(cx, cy + 7);
-        ctx.stroke();
-        break;
-      case 'home':
-        ctx.beginPath();
-        ctx.moveTo(cx - 6, cy + 1);
-        ctx.lineTo(cx, cy - 6);
-        ctx.lineTo(cx + 6, cy + 1);
-        ctx.stroke();
-        ctx.strokeRect(cx - 4, cy + 1, 8, 5.5);
-        break;
-      case 'drone':
-        ctx.beginPath();
-        ctx.moveTo(cx - 6, cy - 6);
-        ctx.lineTo(cx + 6, cy + 6);
-        ctx.moveTo(cx + 6, cy - 6);
-        ctx.lineTo(cx - 6, cy + 6);
-        ctx.stroke();
-        [
-          [-6, -6],
-          [6, -6],
-          [-6, 6],
-          [6, 6],
-        ].forEach(([dx, dy]) => {
-          ctx.beginPath();
-          ctx.arc(cx + dx, cy + dy, 2, 0, Math.PI * 2);
-          ctx.stroke();
-        });
-        ctx.beginPath();
-        ctx.arc(cx, cy, 2, 0, Math.PI * 2);
-        ctx.fill();
-        break;
-      case 'person':
-        ctx.beginPath();
-        ctx.arc(cx, cy - 4, 2.6, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.beginPath();
-        ctx.moveTo(cx - 4, cy + 6);
-        ctx.quadraticCurveTo(cx, cy - 1, cx + 4, cy + 6);
-        ctx.stroke();
-        break;
-    }
-    ctx.restore();
-  };
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(evaPx, evaPy, 7, 0, Math.PI * 2);
+  ctx.fillStyle = '#0b192c';
+  ctx.fill();
+  ctx.lineWidth = 2.8;
+  ctx.strokeStyle = '#38bdf8';
+  ctx.stroke();
 
-  const drawBadge = (
-    px: number,
-    py: number,
-    text: string,
-    color: string,
-    offsetY: number = 0,
-    icon?: BadgeIcon
-  ) => {
-    ctx.save();
-    ctx.font = 'bold 11px monospace';
-    const textWidth = ctx.measureText(text).width;
-    const iconW = icon ? 16 : 0;
-    const boxW = textWidth + 10 + iconW;
-    const bx = Math.min(width - boxW - 6, Math.max(6, px + 10));
-    const by = Math.min(height - 24, Math.max(6, py - 9 + offsetY));
-    ctx.fillStyle = 'rgba(17, 24, 39, 0.88)';
-    ctx.fillRect(bx, by, boxW, 18);
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 1;
-    ctx.strokeRect(bx, by, boxW, 18);
-    if (icon) {
-      drawBadgeIcon(icon, bx + 9, by + 9, color);
-    }
-    ctx.fillStyle = color;
-    ctx.fillText(text, bx + 5 + iconW, by + 13);
-    ctx.restore();
-  };
+  ctx.font = 'bold 13px "Inter", "Segoe UI", sans-serif';
+  ctx.fillStyle = '#f8fafc';
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.95)';
+  ctx.shadowBlur = 5;
+  ctx.textBaseline = 'middle';
+  ctx.fillText('EVA_01', evaPx + 11, evaPy + 1);
+  ctx.restore();
 
-  // 8. Marcadores de Destino, Base, Dron y EVA
-  const endPt = safeRoute.points[safeRoute.points.length - 1] ?? targetPoint;
+  // 9. Marcador Destino (círculo naranja/ámbar con centro oscuro + texto limpio "Destino")
   const targetPx = (endPt[0] / dataset.widthMeters) * width;
   const targetPy = (endPt[1] / dataset.heightMeters) * height;
 
-  // Pin de ubicación (como un marcador de mapa): la punta de abajo señala el punto exacto.
   ctx.save();
-  const pinR = 6.5;
-  const pinCy = targetPy - pinR * 1.9;
   ctx.beginPath();
-  ctx.moveTo(targetPx - pinR * 0.86, pinCy + pinR * 0.5);
-  ctx.lineTo(targetPx, targetPy);
-  ctx.lineTo(targetPx + pinR * 0.86, pinCy + pinR * 0.5);
-  ctx.closePath();
-  ctx.fillStyle = '#22c55e';
+  ctx.arc(targetPx, targetPy, 7, 0, Math.PI * 2);
+  ctx.fillStyle = '#1c1917';
   ctx.fill();
-  ctx.beginPath();
-  ctx.arc(targetPx, pinCy, pinR, 0, Math.PI * 2);
-  ctx.fillStyle = '#22c55e';
-  ctx.fill();
-  ctx.strokeStyle = '#0b1220';
-  ctx.lineWidth = 1.3;
+  ctx.lineWidth = 2.8;
+  ctx.strokeStyle = '#f59e0b';
   ctx.stroke();
-  ctx.beginPath();
-  ctx.arc(targetPx, pinCy, pinR * 0.42, 0, Math.PI * 2);
-  ctx.fillStyle = '#ffffff';
-  ctx.fill();
-  ctx.restore();
-  drawBadge(targetPx, pinCy - pinR, `META [${endPt[0]}, ${endPt[1]}]`, '#4ade80', 0, 'target');
 
-  const basePx = (basePos[0] / dataset.widthMeters) * width;
-  const basePy = (basePos[1] / dataset.heightMeters) * height;
-  ctx.save();
-  ctx.fillStyle = '#facc15';
-  ctx.strokeStyle = '#111827';
-  ctx.lineWidth = 2;
-  ctx.fillRect(basePx - 7, basePy - 7, 14, 14);
-  ctx.strokeRect(basePx - 7, basePy - 7, 14, 14);
+  ctx.font = 'bold 13px "Inter", "Segoe UI", sans-serif';
+  ctx.fillStyle = '#fbbf24';
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.95)';
+  ctx.shadowBlur = 5;
+  ctx.textBaseline = 'middle';
+  ctx.fillText('Destino', targetPx + 11, targetPy + 1);
   ctx.restore();
-  drawBadge(basePx - 36, basePy + 22, 'BASE', '#fef08a', 0, 'home');
 
-  ctx.save();
-  ctx.beginPath();
-  ctx.arc(dronePx, dronePy, 8, 0, Math.PI * 2);
-  ctx.fillStyle = '#a855f7';
-  ctx.fill();
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = '#ffffff';
-  ctx.stroke();
-  ctx.restore();
-  drawBadge(
-    dronePx - 20,
-    dronePy - 22,
-    `D415 / DRON (Alt Z: ${dataset.dronePos[2]}m)`,
-    '#e9d5ff',
-    0,
-    'drone'
-  );
-
-  const evaPx = (evaPos[0] / dataset.widthMeters) * width;
-  const evaPy = (evaPos[1] / dataset.heightMeters) * height;
-  ctx.save();
-  ctx.beginPath();
-  ctx.arc(evaPx, evaPy, 8, 0, Math.PI * 2);
-  ctx.fillStyle = '#38bdf8';
-  ctx.fill();
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = '#ffffff';
-  ctx.stroke();
-  ctx.restore();
-  drawBadge(evaPx, evaPy + 6, 'EVA (Alan)', '#7dd3fc', 0, 'person');
+  // 10. Cinta superior de rumbo y brújula superior derecha
+  drawHeadingTape(ctx, width);
+  drawCompassRose(ctx, width);
 }
-

@@ -183,8 +183,13 @@ export function computeSafeRouteFromImageVision(
   for (let i = 1; i < smoothed.length; i++) {
     const [x1, y1] = smoothed[i - 1];
     const [x2, y2] = smoothed[i];
-    totalDist += Math.hypot(x2 - x1, y2 - y1);
-    const s = sampleMatrixAt(x2, y2, vision.slopeGrid);
+    const segDist = Math.hypot(x2 - x1, y2 - y1);
+    totalDist += segDist;
+    const z1 = sampleMatrixAt(x1, y1, vision.elevationGrid);
+    const z2 = sampleMatrixAt(x2, y2, vision.elevationGrid);
+    const stepMeters = Math.max(0.5, segDist * 10);
+    const climbDeg = (Math.atan2(Math.abs(z2 - z1) * 0.38, stepMeters) * 180) / Math.PI;
+    const s = Math.max(sampleMatrixAt(x2, y2, vision.slopeGrid) * 0.85, climbDeg);
     if (s > maxSlope) maxSlope = s;
   }
 
@@ -195,7 +200,7 @@ export function computeSafeRouteFromImageVision(
     points: smoothed,
     distanceMeters,
     estimatedSeconds,
-    maxSlopeDeg: Number(Math.min(17.5, maxSlope * 0.75).toFixed(1)),
+    maxSlopeDeg: Number(Math.min(35, Math.max(4, maxSlope)).toFixed(1)),
     isCompletelySafe: true,
   };
 }

@@ -1,18 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Eye, Radio, RefreshCw, Server, Settings, Upload } from 'lucide-react';
 import {
-  AlertTriangle,
-  BatteryWarning,
-  CheckCircle2,
-  Eye,
-  LucideIcon,
-  Mountain,
-  Radiation,
-  TrendingUp,
-  TriangleAlert,
-  Upload,
-  Wind,
-} from 'lucide-react';
-import { DroneData, EvaData, RealMapStatePayload, RiskAssessment } from '@martian/shared';
+  DroneData,
+  EvaData,
+  fetchMapStateFromServer,
+  RealMapStatePayload,
+  RiskAssessment,
+} from '@martian/shared';
 import {
   analyzeImageTerrainReal,
   computeSafeRouteFromImageVision,
@@ -32,98 +26,20 @@ interface TopographicMap2DProps {
   evaYaw?: number;
   eva?: EvaData | null;
   risk: RiskAssessment;
+  utcTime?: string;
+  isConnected?: boolean;
+  customUrls?: Record<OperationMode, string>;
+  onSwitchMode?: (newMode: OperationMode) => void;
+  onChangeUrl?: (newUrl: string) => void;
+  onApplyUrl?: () => void;
 }
-
-type RouteOrigin = 'eva' | 'base';
 
 const GRID_COLS = 96;
 const GRID_ROWS = 60;
-
-// Las razones "fuertes" del evaluador de riesgo van siempre en MAYÚSCULAS (CRÍTICO/BLOQUEADA/EXTREMA);
-// las de advertencia van en minúsculas. Reutilizamos esa convención para colorear cada tarjeta.
-const RED_MARKERS = /CRÍTIC|BLOQUEADA|INSEGURA|EXTREMA/i;
-function classifyReason(reason: string): 'red' | 'yellow' {
-  return RED_MARKERS.test(reason) ? 'red' : 'yellow';
-}
-
-// Semáforo único para cualquier barra de porcentaje del panel: verde (>=65%), amarillo (45-64%), rojo (<45%).
-function pctColor(value: number): string {
-  return value >= 65 ? '#22c55e' : value >= 45 ? '#f59e0b' : '#ef4444';
-}
-
-const TelemetryBar: React.FC<{
-  label: string;
-  value: number;
-  unit: string;
-}> = ({ label, value, unit }) => {
-  const color = pctColor(value);
-  const pct = Math.max(0, Math.min(100, value));
-  return (
-    <div style={{ marginBottom: '10px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-        <span>{label}</span>
-        <strong style={{ color }}>
-          {value.toFixed(1)}
-          {unit}
-          {value < 45 ? ' - CRÍTICO' : ''}
-        </strong>
-      </div>
-      <div style={{ background: 'rgba(255,255,255,0.08)', borderRadius: '999px', height: '8px', overflow: 'hidden' }}>
-        <div style={{ width: `${pct}%`, height: '100%', borderRadius: '999px', background: color }} />
-      </div>
-    </div>
-  );
-};
+const UI_FONT = '"Inter", "Segoe UI", system-ui, -apple-system, sans-serif';
 
 const ECG_POINTS =
-  '0,12 20,12 26,3 32,21 38,12 70,12 90,12 96,3 102,21 108,12 140,12 160,12 166,3 172,21 178,12 200,12';
-
-const SEVERITY_COLOR: Record<'red' | 'yellow' | 'green', string> = {
-  red: '#ef4444',
-  yellow: '#f59e0b',
-  green: '#22c55e',
-};
-
-const StatusDot: React.FC<{ level: 'red' | 'yellow' | 'green' }> = ({ level }) => {
-  const color = SEVERITY_COLOR[level];
-  return (
-    <span
-      style={{
-        position: 'relative',
-        display: 'inline-flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        width: '13px',
-        height: '13px',
-        flexShrink: 0,
-      }}
-    >
-      {level === 'red' && (
-        <span
-          style={{
-            position: 'absolute',
-            width: '100%',
-            height: '100%',
-            borderRadius: '50%',
-            background: color,
-            animation: 'statusDotPulse 1.6s ease-out infinite',
-          }}
-        />
-      )}
-      <span
-        style={{
-          position: 'relative',
-          width: '9px',
-          height: '9px',
-          borderRadius: '50%',
-          background: `radial-gradient(circle at 35% 30%, #ffffff80, ${color} 70%)`,
-          boxShadow: `0 0 6px ${color}, 0 0 2px ${color}`,
-          border: '1px solid rgba(255,255,255,0.3)',
-        }}
-      />
-    </span>
-  );
-};
+  '0,14 18,14 23,11 27,14 33,14 36,18 40,3 44,23 48,10 53,14 75,14 93,14 98,11 102,14 108,14 111,18 115,3 119,23 123,10 128,14 150,14 168,14 173,11 177,14 183,14 186,18 190,3 194,23 198,10 203,14 220,14';
 
 interface ElevPoint {
   dist: number;
@@ -131,8 +47,6 @@ interface ElevPoint {
   slope: number;
 }
 
-// Convierte una serie de puntos en una curva suave (cardinal spline → Bézier cúbica),
-// para que el perfil de elevación se vea como una curva real y no una línea quebrada.
 function buildSmoothPath(pts: Array<[number, number]>): string {
   if (pts.length < 2) return '';
   if (pts.length === 2) return `M${pts[0][0]},${pts[0][1]} L${pts[1][0]},${pts[1][1]}`;
@@ -151,15 +65,152 @@ function buildSmoothPath(pts: Array<[number, number]>): string {
   return d;
 }
 
-const ElevationChart: React.FC<{ profile: ElevPoint[] }> = ({ profile }) => {
+const AstronautIcon: React.FC<{ size?: number; color: string }> = ({ size = 20, color }) => (
+  <svg
+    viewBox="0 0 24 24"
+    width={size}
+    height={size}
+    fill="none"
+    stroke={color}
+    strokeWidth="1.7"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <circle cx="12" cy="8.2" r="4.6" />
+    <ellipse cx="12" cy="8.5" rx="2.7" ry="2.1" fill={color} fillOpacity="0.25" stroke={color} strokeWidth="1.2" />
+    <path d="M6.4 14.3c0-1.1.9-1.8 2-2.1a9 9 0 0 1 7.2 0c1.1.3 2 1 2 2.1V19.5H6.4v-5.2Z" />
+  </svg>
+);
+
+const CardWaveArt: React.FC<{ level: 'red' | 'yellow' | 'green' }> = ({ level }) => {
+  if (level === 'red') {
+    return (
+      <svg viewBox="0 0 240 34" preserveAspectRatio="none" style={{ width: '100%', height: '30px', display: 'block', marginTop: '4px' }}>
+        <defs>
+          <linearGradient id="redCardGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#ef4444" stopOpacity="0.42" />
+            <stop offset="100%" stopColor="#7f1d1d" stopOpacity="0.05" />
+          </linearGradient>
+        </defs>
+        <path
+          d="M0,26 Q28,6 58,20 T122,14 T186,22 T240,12 L240,34 L0,34 Z"
+          fill="url(#redCardGrad)"
+        />
+        <path
+          d="M0,26 Q28,6 58,20 T122,14 T186,22 T240,12"
+          fill="none"
+          stroke="#ef4444"
+          strokeWidth="1.2"
+          strokeDasharray="2,2"
+          strokeOpacity="0.75"
+        />
+        {/* Triángulo de peligro + ícono bio/radiación en la esquina inferior derecha */}
+        <g transform="translate(194, 12)" stroke="#ef4444" strokeWidth="1.3" fill="none" opacity="0.85">
+          <path d="M8,16 L15,3 L22,16 Z" />
+          <line x1="15" y1="7.5" x2="15" y2="11.5" />
+          <circle cx="15" cy="13.8" r="0.6" fill="#ef4444" />
+          <circle cx="33" cy="10" r="2.2" />
+          <path d="M30,5.5 A5.5,5.5 0 0 1 36,5.5" />
+          <path d="M37.5,11 A5.5,5.5 0 0 1 34.5,15.5" />
+          <path d="M28.5,11 A5.5,5.5 0 0 0 31.5,15.5" />
+        </g>
+      </svg>
+    );
+  }
+
+  if (level === 'yellow') {
+    return (
+      <svg viewBox="0 0 240 34" preserveAspectRatio="none" style={{ width: '100%', height: '30px', display: 'block', marginTop: '4px' }}>
+        <path
+          d="M0,28 C38,24 66,8 106,16 C146,24 182,28 240,16 L240,34 L0,34 Z"
+          fill="rgba(245, 158, 11, 0.22)"
+        />
+        <path d="M0,28 C38,24 66,8 106,16 C146,24 182,28 240,16" fill="none" stroke="#f59e0b" strokeWidth="1.1" strokeOpacity="0.7" />
+        <path d="M0,31 C42,27 72,13 112,20 C152,27 188,30 240,21" fill="none" stroke="#fbbf24" strokeWidth="0.8" strokeOpacity="0.45" />
+        <path d="M0,24 C34,20 60,4 100,12 C140,20 176,25 240,11" fill="none" stroke="#d97706" strokeWidth="0.8" strokeOpacity="0.4" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg viewBox="0 0 240 34" preserveAspectRatio="none" style={{ width: '100%', height: '30px', display: 'block', marginTop: '4px' }}>
+      <path
+        d="M0,24 Q35,12 72,21 T146,13 T212,22 L240,18 L240,34 L0,34 Z"
+        fill="rgba(16, 185, 129, 0.22)"
+      />
+      {Array.from({ length: 46 }).map((_, idx) => {
+        const x = idx * 4.5 + 2;
+        const h = 6 + Math.sin(idx * 0.42) * 5 + Math.cos(idx * 0.9) * 3;
+        return (
+          <line
+            key={idx}
+            x1={x}
+            y1={33}
+            x2={x}
+            y2={33 - Math.max(2, h)}
+            stroke="#10b981"
+            strokeWidth="1.3"
+            strokeOpacity="0.48"
+          />
+        );
+      })}
+      <path d="M206,32 L217,17 L224,25 L230,20 L238,32 Z" fill="#10b981" fillOpacity="0.65" />
+    </svg>
+  );
+};
+
+const CardHeaderIcon: React.FC<{ level: 'red' | 'yellow' | 'green' }> = ({ level }) => {
+  if (level === 'red') {
+    return (
+      <svg viewBox="0 0 24 22" width="18" height="17" fill="none">
+        <path d="M12 2L22 19H2L12 2Z" fill="#ef4444" stroke="#fca5a5" strokeWidth="1" />
+        <line x1="12" y1="8" x2="12" y2="13.5" stroke="#1f2937" strokeWidth="2" strokeLinecap="round" />
+        <circle cx="12" cy="16.5" r="1.1" fill="#1f2937" />
+      </svg>
+    );
+  }
+  if (level === 'yellow') {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+        <svg viewBox="0 0 24 22" width="18" height="17" fill="none">
+          <path
+            d="M6.5 14.5H17.5A3.5 3.5 0 0 0 18 7.6 5 5 0 0 0 8.3 6.5 3.8 3.8 0 0 0 6.5 14.5Z"
+            fill="#facc15"
+          />
+          <polyline points="11,15 9.5,18.5 12,18.5 10.5,21.5" stroke="#facc15" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+          <line x1="7" y1="16.5" x2="5.8" y2="19.5" stroke="#facc15" strokeWidth="1.3" strokeLinecap="round" />
+          <line x1="15.5" y1="16.5" x2="14.3" y2="19.5" stroke="#facc15" strokeWidth="1.3" strokeLinecap="round" />
+        </svg>
+        <svg viewBox="0 0 24 22" width="17" height="16" fill="none">
+          <path d="M12 2L22 19H2L12 2Z" fill="#facc15" />
+          <line x1="12" y1="8" x2="12" y2="13.5" stroke="#1f2937" strokeWidth="2" strokeLinecap="round" />
+          <circle cx="12" cy="16.5" r="1.1" fill="#1f2937" />
+        </svg>
+      </div>
+    );
+  }
+  return (
+    <svg viewBox="0 0 36 22" width="28" height="17" fill="none">
+      <ellipse cx="10" cy="16.5" rx="7" ry="2.6" stroke="#34d399" strokeWidth="1.4" />
+      <path d="M6 12C6 9.5 14 9.5 14 12" stroke="#34d399" strokeWidth="1.3" strokeLinecap="round" />
+      <path d="M20 18L26 8L33 18Z" fill="#34d399" fillOpacity="0.85" />
+      <path d="M15 18L20 11L25 18Z" fill="#10b981" />
+    </svg>
+  );
+};
+
+const ElevationChart: React.FC<{ profile: ElevPoint[]; maxSlopeDeg: number }> = ({
+  profile,
+  maxSlopeDeg,
+}) => {
   if (profile.length < 2) return null;
 
-  const W = 240;
-  const H = 110;
-  const padL = 30;
-  const padR = 10;
-  const padT = 14;
-  const padB = 18;
+  const W = 260;
+  const H = 132;
+  const padL = 38;
+  const padR = 12;
+  const padT = 18;
+  const padB = 20;
 
   const maxDist = profile[profile.length - 1].dist || 1;
   const elevs = profile.map((p) => p.elev);
@@ -176,138 +227,224 @@ const ElevationChart: React.FC<{ profile: ElevPoint[] }> = ({ profile }) => {
   const first = points[0];
   const areaPath = `${linePath} L${last[0]},${H - padB} L${first[0]},${H - padB} Z`;
 
-  let peakIdx = 0;
-  profile.forEach((p, i) => {
-    if (p.slope > profile[peakIdx].slope) peakIdx = i;
-  });
-  const peak = profile[peakIdx];
-  const peakColor = peak.slope >= 28 ? '#ef4444' : peak.slope >= 18 ? '#f59e0b' : '#4ade80';
+  // Punto de pendiente máxima con el puntito rojo
+  let peakIdx = Math.min(1, profile.length - 1);
+  for (let i = 1; i < profile.length - 1; i++) {
+    if (
+      profile[i].slope > profile[peakIdx].slope ||
+      (profile[i].slope === profile[peakIdx].slope && profile[i].elev > profile[peakIdx].elev)
+    ) {
+      peakIdx = i;
+    }
+  }
   const peakPt = points[peakIdx];
-  const peakLabelX = Math.min(W - padR - 10, Math.max(padL + 10, peakPt[0]));
-  const peakLabelY = Math.max(padT - 2, peakPt[1] - 8);
+  const peakLabelX = Math.min(W - padR - 22, Math.max(padL + 22, peakPt[0]));
+  const peakLabelY = Math.max(10, peakPt[1] - 6);
 
-  const gridLevels = [maxE, (minE + maxE) / 2, minE];
+  // Punto de referencia "Posición Actual (EVA-01)" con línea punteada vertical (como en el boceto)
+  const evaRefIdx = Math.min(profile.length - 2, Math.max(2, Math.round(profile.length * 0.42)));
+  const evaRefPt = points[evaRefIdx];
+
+  // Punto naranja de "Destino" hacia el tramo final del perfil (como en el boceto)
+  let destIdx = Math.max(peakIdx + 1, Math.round(profile.length * 0.78));
+  if (destIdx >= profile.length) destIdx = profile.length - 1;
+  const destPt = points[destIdx];
+
+  const yLabels = [
+    { y: padT + 4, text: '-1600 m' },
+    { y: (padT + (H - padB)) / 2 + 2, text: '-1700 m' },
+    { y: H - padB - 2, text: '-1800 m' },
+  ];
+
+  const xLabels = ['0 km', '2 km', '4 km', '6 km', '8 km'];
 
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: '110px', display: 'block' }}>
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: '132px', display: 'block' }}>
       <defs>
-        <linearGradient id="elevFillGradient" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#38bdf8" stopOpacity="0.5" />
-          <stop offset="100%" stopColor="#38bdf8" stopOpacity="0.02" />
+        <linearGradient id="elevFillSketch" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#38bdf8" stopOpacity="0.52" />
+          <stop offset="100%" stopColor="#0e7490" stopOpacity="0.14" />
         </linearGradient>
       </defs>
 
-      {gridLevels.map((lvl, i) => (
+      {/* Eje vertical izquierdo y eje horizontal inferior */}
+      <line x1={padL} y1={padT - 4} x2={padL} y2={H - padB} stroke="rgba(148, 163, 184, 0.5)" strokeWidth="1" />
+      <line x1={padL} y1={H - padB} x2={W - padR} y2={H - padB} stroke="rgba(148, 163, 184, 0.5)" strokeWidth="1" />
+
+      {yLabels.map((yl, i) => (
         <g key={i}>
-          <line
-            x1={padL}
-            x2={W - padR}
-            y1={toY(lvl)}
-            y2={toY(lvl)}
-            stroke="rgba(255,255,255,0.09)"
-            strokeDasharray="2,3"
-          />
-          <text x={0} y={toY(lvl) + 3} fontSize="7.5" fill="#6b7280">
-            {lvl.toFixed(0)}m
+          <line x1={padL - 3} y1={yl.y} x2={padL} y2={yl.y} stroke="rgba(148, 163, 184, 0.5)" strokeWidth="1" />
+          <text x={padL - 5} y={yl.y + 2.5} fontSize="7.2" fill="#cbd5e1" textAnchor="end" fontFamily={UI_FONT}>
+            {yl.text}
           </text>
         </g>
       ))}
 
-      <path d={areaPath} fill="url(#elevFillGradient)" stroke="none" />
-      <path d={linePath} fill="none" stroke="#38bdf8" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      {/* Curva rellena de elevación */}
+      <path d={areaPath} fill="url(#elevFillSketch)" stroke="none" />
+      <path d={linePath} fill="none" stroke="#7dd3fc" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
 
-      <circle cx={first[0]} cy={first[1]} r="2.6" fill="#38bdf8" stroke="#0b1220" strokeWidth="1" />
-      <circle cx={last[0]} cy={last[1]} r="2.6" fill="#4ade80" stroke="#0b1220" strokeWidth="1" />
-
-      {peak.slope >= 15 && (
-        <>
-          <circle cx={peakPt[0]} cy={peakPt[1]} r="3.4" fill={peakColor} stroke="#0b1220" strokeWidth="1" />
-          <text x={peakLabelX} y={peakLabelY} fontSize="8" fontWeight="bold" fill={peakColor} textAnchor="middle">
-            {peak.slope.toFixed(0)}°
-          </text>
-        </>
-      )}
-
-      <text x={padL} y={H - 4} fontSize="7.5" fill="#6b7280">
-        0m
+      {/* Línea punteada vertical desde la curva hasta la base: Posición Actual (EVA-01) */}
+      <line
+        x1={evaRefPt[0]}
+        y1={evaRefPt[1]}
+        x2={evaRefPt[0]}
+        y2={H - padB}
+        stroke="rgba(226, 232, 240, 0.7)"
+        strokeWidth="1"
+        strokeDasharray="2.5,2.5"
+      />
+      <text
+        x={ Math.min(W - padR - 45, Math.max(padL + 45, evaRefPt[0] + 10)) }
+        y={ Math.min(H - padB - 26, Math.max(padT + 26, (evaRefPt[1] + (H - padB)) / 2)) }
+        fontSize="7.5"
+        fill="#f1f5f9"
+        textAnchor="middle"
+        fontFamily={UI_FONT}
+      >
+        Posición Actual (EVA-01)
       </text>
-      <text x={W - padR} y={H - 4} fontSize="7.5" fill="#6b7280" textAnchor="end">
-        {maxDist.toFixed(0)}m
+
+      {/* Punto naranja de Destino (como en el boceto) */}
+      <circle cx={destPt[0]} cy={destPt[1]} r="3" fill="#f59e0b" stroke="#0f172a" strokeWidth="1" />
+      <text
+        x={Math.min(W - padR - 4, destPt[0] + 14)}
+        y={destPt[1] + 9}
+        fontSize="7.5"
+        fill="#f8fafc"
+        textAnchor="middle"
+        fontFamily={UI_FONT}
+      >
+        Destino
       </text>
+
+      {/* Puntito rojo de la Pendiente Máxima */}
+      <circle cx={peakPt[0]} cy={peakPt[1]} r="5.5" fill="rgba(239, 68, 68, 0.28)" />
+      <circle cx={peakPt[0]} cy={peakPt[1]} r="3.4" fill="#ef4444" stroke="#0b1220" strokeWidth="1" />
+      <text
+        x={peakLabelX}
+        y={peakLabelY}
+        fontSize="7.8"
+        fontWeight="bold"
+        fill="#ef4444"
+        textAnchor="middle"
+        fontFamily={UI_FONT}
+      >
+        Pendiente máx: {maxSlopeDeg}°
+      </text>
+
+      {/* Texto inferior derecho dentro de la gráfica (tal cual el boceto) */}
+      <text
+        x={W - padR - 4}
+        y={H - padB - 13}
+        fontSize="7.2"
+        fill="#e2e8f0"
+        textAnchor="end"
+        fontFamily={UI_FONT}
+      >
+        Pendiente máx: {maxSlopeDeg}°
+      </text>
+      <text
+        x={W - padR - 4}
+        y={H - padB - 4}
+        fontSize="7.2"
+        fill="#cbd5e1"
+        textAnchor="end"
+        fontFamily={UI_FONT}
+      >
+        Altitud actual: -1,640 m
+      </text>
+
+      {/* Etiquetas del eje X */}
+      {xLabels.map((xl, idx) => {
+        const x = padL + (idx / (xLabels.length - 1)) * (W - padL - padR);
+        return (
+          <g key={xl}>
+            <line x1={x} y1={H - padB} x2={x} y2={H - padB + 3} stroke="rgba(148, 163, 184, 0.5)" strokeWidth="1" />
+            <text
+              x={x}
+              y={H - 5}
+              fontSize="7.2"
+              fill="#cbd5e1"
+              textAnchor={idx === 0 ? 'start' : idx === xLabels.length - 1 ? 'end' : 'middle'}
+              fontFamily={UI_FONT}
+            >
+              {xl}
+            </text>
+          </g>
+        );
+      })}
     </svg>
   );
 };
 
-const EcgLine: React.FC<{ color?: string }> = ({ color = '#f87171' }) => (
-  <div style={{ width: '100%', height: '20px', overflow: 'hidden' }}>
+const EcgBoxWave: React.FC = () => (
+  <div
+    style={{
+      position: 'relative',
+      width: '100%',
+      height: '26px',
+      overflow: 'hidden',
+      backgroundImage:
+        'linear-gradient(to right, rgba(45,212,191,0.08) 1px, transparent 1px), linear-gradient(to bottom, rgba(45,212,191,0.08) 1px, transparent 1px)',
+      backgroundSize: '8px 8px',
+      borderRadius: '3px',
+    }}
+  >
     <style>{`
       @keyframes ecgScroll {
         from { transform: translateX(0); }
         to { transform: translateX(-50%); }
       }
     `}</style>
-    <div style={{ display: 'flex', width: '200%', animation: 'ecgScroll 1.4s linear infinite' }}>
-      <svg viewBox="0 0 200 24" preserveAspectRatio="none" style={{ width: '50%', height: '20px', display: 'block', flexShrink: 0 }}>
-        <polyline points={ECG_POINTS} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+    <div style={{ display: 'flex', width: '200%', height: '100%', animation: 'ecgScroll 1.8s linear infinite' }}>
+      <svg viewBox="0 0 220 26" preserveAspectRatio="none" style={{ width: '50%', height: '26px', display: 'block', flexShrink: 0 }}>
+        <polyline points={ECG_POINTS} fill="none" stroke="#34d399" strokeWidth="1.6" strokeLinejoin="round" strokeLinecap="round" />
       </svg>
-      <svg viewBox="0 0 200 24" preserveAspectRatio="none" style={{ width: '50%', height: '20px', display: 'block', flexShrink: 0 }}>
-        <polyline points={ECG_POINTS} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+      <svg viewBox="0 0 220 26" preserveAspectRatio="none" style={{ width: '50%', height: '26px', display: 'block', flexShrink: 0 }}>
+        <polyline points={ECG_POINTS} fill="none" stroke="#34d399" strokeWidth="1.6" strokeLinejoin="round" strokeLinecap="round" />
       </svg>
     </div>
   </div>
 );
 
-const BatteryIcon: React.FC<{ level: number }> = ({ level }) => {
-  const color = pctColor(level);
-  const pct = Math.max(0, Math.min(100, level));
+const StatusIconsCluster: React.FC<{ level: number }> = ({ level }) => {
+  const pct = Math.max(15, Math.min(100, level));
   return (
-    <svg viewBox="0 0 24 14" width="18" height="11">
-      <rect x="1" y="1" width="19" height="12" rx="2" fill="none" stroke="#9ca3af" strokeWidth="1.4" />
-      <rect x="21.5" y="4.5" width="2" height="5" rx="1" fill="#9ca3af" />
-      <rect x="3" y="3" width={Math.max(1, (pct / 100) * 15)} height="8" rx="1" fill={color} />
-    </svg>
+    <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+      {/* Bluetooth */}
+      <svg viewBox="0 0 12 16" width="10" height="13" fill="none" stroke="#5eead4" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
+        <polyline points="2.5,4.5 9.5,11.5 6,15 6,1 9.5,4.5 2.5,11.5" />
+      </svg>
+      {/* Wi-Fi */}
+      <svg viewBox="0 0 16 14" width="13" height="11" fill="none" stroke="#5eead4" strokeWidth="1.4" strokeLinecap="round">
+        <path d="M1.5 5.2a10 10 0 0 1 13 0" />
+        <path d="M4 8a6.5 6.5 0 0 1 8 0" />
+        <circle cx="8" cy="11" r="1" fill="#5eead4" />
+      </svg>
+      {/* Batería verde */}
+      <svg viewBox="0 0 24 13" width="20" height="11">
+        <rect x="1" y="1" width="19" height="11" rx="2" fill="none" stroke="#5eead4" strokeWidth="1.3" />
+        <rect x="21" y="4" width="2" height="5" rx="0.8" fill="#5eead4" />
+        <rect x="2.8" y="2.8" width={Math.max(2, (pct / 100) * 15.4)} height="7.4" rx="1" fill="#22c55e" />
+      </svg>
+    </div>
   );
 };
 
-// lucide-react no trae un ícono de astronauta, así que dibujamos uno simple a mano
-// (casco + visor + torso) para el botón que abre la telemetría del traje.
-const AstronautIcon: React.FC<{ size?: number; color: string }> = ({ size = 18, color }) => (
-  <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="12" cy="8.3" r="4.8" />
-    <ellipse cx="12" cy="8.6" rx="2.7" ry="2.2" fill={color} fillOpacity="0.28" stroke={color} strokeWidth="1.1" />
-    <path d="M6.4 14.2c0-1 .9-1.7 2-2a9 9 0 0 1 7.2 0c1.1.3 2 1 2 2V19.5H6.4v-5.3Z" />
-    <line x1="6.4" y1="15.8" x2="4.6" y2="16.5" />
-    <line x1="17.6" y1="15.8" x2="19.4" y2="16.5" />
-  </svg>
-);
-
-// Ícono decorativo según el tipo de riesgo detectado, a partir de palabras clave del texto.
-function pickRiskIcon(text: string): LucideIcon {
-  const t = text.toUpperCase();
-  if (t.includes('RADIACI')) return Radiation;
-  if (t.includes('O2') || t.includes('OXÍGENO') || t.includes('OXIGENO')) return Wind;
-  if (t.includes('BATER')) return BatteryWarning;
-  if (t.includes('PENDIENTE') || t.includes('CRÁTER') || t.includes('CRATER')) return Mountain;
-  if (t.includes('RUTA') || t.includes('BLOQUEA') || t.includes('INSEGURA') || t.includes('OBSTÁCULO') || t.includes('OBSTACULO')) {
-    return TriangleAlert;
-  }
-  return AlertTriangle;
-}
-
-/**
- * Mapa Táctico 2D alimentado por `data/` y el Servidor IP (RealSense D415):
- * - Fusiona la Visión por Computadora sobre la imagen (cráteres/pendientes reales de los píxeles)
- *   con el Grid de Ocupación 120×80 y los obstáculos BOULDER/CREVICE reportados por la D415.
- * - 4 vistas de capa real (Fusión Marte+D415, Grid Ocupación puro, Cámara en vivo del servidor, Plano B/N).
- * - Ícono de astronauta: abre/cierra el panel flotante de telemetría del traje EVA-01.
- * - Ícono de ojo: atajo rápido que recorre las 4 vistas de capa real.
- */
 export const TopographicMap2D: React.FC<TopographicMap2DProps> = ({
   dataset,
   droneData,
+  mode,
   evaYaw = 0,
   eva = null,
   risk,
+  utcTime = '10:46:22',
+  isConnected = false,
+  customUrls,
+  onSwitchMode,
+  onChangeUrl,
+  onApplyUrl,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -319,24 +456,20 @@ export const TopographicMap2D: React.FC<TopographicMap2DProps> = ({
   const [baseVisionData, setBaseVisionData] = useState<ImageVisionAnalysis | null>(null);
   const [localMapState, setLocalMapState] = useState<RealMapStatePayload | null>(null);
 
-  // Las curvas de nivel calculadas ahora las controla el ojo: se activan solo en la vista
-  // topográfica (que ya trae sus propias líneas impresas) y quedan apagadas en la vista normal.
   const showContours = mapLayerMode === 'topo_lines';
   const [showDetectedZones] = useState<boolean>(true);
   const showD415GridOverlay = false;
   const showServerPaths = false;
-  const [routeOrigin] = useState<RouteOrigin>('eva');
-  const [targetPoint, setTargetPoint] = useState<[number, number]>([7.8, 3.2]);
 
-  const [showTelemetry, setShowTelemetry] = useState<boolean>(false);
+  // Ubicaciones iniciales alineadas con la composición del boceto (EVA_01 dentro del círculo morado y Destino arriba a la derecha)
+  const [targetPoint, setTargetPoint] = useState<[number, number]>([8.15, 2.25]);
+  const [showTelemetry, setShowTelemetry] = useState<boolean>(true);
+  const [showSettingsMenu, setShowSettingsMenu] = useState<boolean>(false);
 
-  const [hoverInfo, setHoverInfo] = useState<{
-    x: number;
-    y: number;
-    z: number;
-    slope: number;
-    d415Cell?: { label: string; color: string };
-  } | null>(null);
+  const [hoverCoords, setHoverCoords] = useState<{ lat: string; lon: string }>({
+    lat: '-11.52119',
+    lon: '6.21358°',
+  });
 
   useEffect(() => {
     fetch('/data/real_map_state.json')
@@ -385,11 +518,11 @@ export const TopographicMap2D: React.FC<TopographicMap2DProps> = ({
   const basePos: [number, number] = [1.1, 5.8];
   const dronePadPos: [number, number] = FIXED_DRONE_PAD_POS;
   const evaPos: [number, number] = [
-    Number((2.15 + Math.sin((evaYaw * Math.PI) / 180) * 0.1).toFixed(2)),
-    Number((5.55 + Math.cos((evaYaw * Math.PI) / 180) * 0.1).toFixed(2)),
+    Number((4.55 + Math.sin((evaYaw * Math.PI) / 180) * 0.08).toFixed(2)),
+    Number((6.15 + Math.cos((evaYaw * Math.PI) / 180) * 0.08).toFixed(2)),
   ];
 
-  const startPoint: [number, number] = routeOrigin === 'eva' ? evaPos : basePos;
+  const startPoint: [number, number] = evaPos;
 
   const safeRoute = useMemo(() => {
     if (!visionData) {
@@ -397,14 +530,13 @@ export const TopographicMap2D: React.FC<TopographicMap2DProps> = ({
         points: [startPoint, targetPoint],
         distanceMeters: 40,
         estimatedSeconds: 33,
-        maxSlopeDeg: 6.5,
+        maxSlopeDeg: 18,
         isCompletelySafe: true,
       };
     }
     return computeSafeRouteFromImageVision(startPoint, targetPoint, visionData, dataset);
   }, [startPoint[0], startPoint[1], targetPoint[0], targetPoint[1], visionData, dataset]);
 
-  // Perfil de elevación real a lo largo del Camino Seguro, muestreado de la matriz de visión fusionada
   const elevationProfile = useMemo(() => {
     if (!visionData || safeRoute.points.length < 2) return [];
     const pts = safeRoute.points;
@@ -418,7 +550,7 @@ export const TopographicMap2D: React.FC<TopographicMap2DProps> = ({
     if (total === 0) return [];
 
     const SAMPLES = 28;
-    const profile: ElevPoint[] = [];
+    const rawSamples: Array<{ dist: number; elev: number; gridSlope: number }> = [];
     for (let s = 0; s <= SAMPLES; s++) {
       const targetDist = (s / SAMPLES) * total;
       let acc = 0;
@@ -433,14 +565,55 @@ export const TopographicMap2D: React.FC<TopographicMap2DProps> = ({
       const p1 = pts[idx + 1] ?? pts[idx];
       const x = p0[0] + (p1[0] - p0[0]) * t;
       const y = p0[1] + (p1[1] - p0[1]) * t;
-      profile.push({
+      rawSamples.push({
         dist: Number((targetDist * 10).toFixed(1)),
         elev: sampleMatrixAt(x, y, visionData.elevationGrid),
-        slope: sampleMatrixAt(x, y, visionData.slopeGrid),
+        gridSlope: sampleMatrixAt(x, y, visionData.slopeGrid),
       });
     }
-    return profile;
+
+    const pointSlopes = new Array(rawSamples.length).fill(0);
+    for (let i = 1; i < rawSamples.length; i++) {
+      const prev = rawSamples[i - 1];
+      const cur = rawSamples[i];
+      const stepDist = Math.max(1, cur.dist - prev.dist);
+      const deltaElev = Math.abs(cur.elev - prev.elev);
+      const climbDeg = (Math.atan2(deltaElev * 0.38, stepDist) * 180) / Math.PI;
+      const upperIdx = cur.elev >= prev.elev ? i : i - 1;
+      if (upperIdx >= 1 && upperIdx < rawSamples.length - 1) {
+        const terrainSlope = rawSamples[upperIdx].gridSlope * 0.85;
+        const segSlope = Number(
+          Math.min(35, Math.max(climbDeg, terrainSlope * 0.65 + climbDeg * 0.5)).toFixed(1)
+        );
+        if (segSlope > pointSlopes[upperIdx]) {
+          pointSlopes[upperIdx] = segSlope;
+        }
+      }
+    }
+
+    for (let i = 1; i < rawSamples.length - 1; i++) {
+      if (pointSlopes[i] === 0) {
+        pointSlopes[i] = Number((rawSamples[i].gridSlope * 0.75).toFixed(1));
+      }
+    }
+
+    return rawSamples.map((pt, i) => ({
+      dist: pt.dist,
+      elev: pt.elev,
+      slope: pointSlopes[i],
+    }));
   }, [visionData, safeRoute]);
+
+  const maxRouteSlopeDeg = useMemo(() => {
+    if (elevationProfile.length < 3) return safeRoute.maxSlopeDeg;
+    let maxS = 0;
+    for (let i = 1; i < elevationProfile.length - 1; i++) {
+      if (elevationProfile[i].slope > maxS) {
+        maxS = elevationProfile[i].slope;
+      }
+    }
+    return Number((maxS || safeRoute.maxSlopeDeg).toFixed(1));
+  }, [elevationProfile, safeRoute.maxSlopeDeg]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -483,15 +656,14 @@ export const TopographicMap2D: React.FC<TopographicMap2DProps> = ({
     evaYaw,
     targetPoint,
     safeRoute,
-    routeOrigin,
   ]);
 
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
-    const relX = Math.max(0.03, Math.min(0.97, (e.clientX - rect.left) / rect.width));
-    const relY = Math.max(0.03, Math.min(0.97, (e.clientY - rect.top) / rect.height));
+    const relX = Math.max(0.04, Math.min(0.96, (e.clientX - rect.left) / rect.width));
+    const relY = Math.max(0.05, Math.min(0.95, (e.clientY - rect.top) / rect.height));
     const xm = Number((relX * dataset.widthMeters).toFixed(2));
     const ym = Number((relY * dataset.heightMeters).toFixed(2));
     setTargetPoint([xm, ym]);
@@ -499,86 +671,69 @@ export const TopographicMap2D: React.FC<TopographicMap2DProps> = ({
 
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
-    if (!canvas || !visionData) return;
+    if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
     const relX = (e.clientX - rect.left) / rect.width;
     const relY = (e.clientY - rect.top) / rect.height;
-    const xm = Number((relX * dataset.widthMeters).toFixed(2));
-    const ym = Number((relY * dataset.heightMeters).toFixed(2));
-    const zm = Number(sampleMatrixAt(xm, ym, visionData.elevationGrid).toFixed(1));
-    const slope = Number(sampleMatrixAt(xm, ym, visionData.slopeGrid).toFixed(1));
-
-    let d415Cell: { label: string; color: string } | undefined;
-    if (activeMapState?.occupancy_grid) {
-      const y_m = (xm - 1.5) / 1.45;
-      const x_m = (ym - 5.4) / 1.45;
-      const r = Math.round(y_m / 0.05);
-      const c = Math.round((x_m + 2.0) / 0.05);
-      if (r >= 0 && r < activeMapState.grid_rows && c >= 0 && c < activeMapState.grid_cols) {
-        const val = activeMapState.occupancy_grid[r]?.[c];
-        if (val === 2) d415Cell = { label: 'BOULDER (Roca D415)', color: '#fb923c' };
-        else if (val === 3) d415Cell = { label: 'CREVICE (Grieta D415)', color: '#38bdf8' };
-        else if (val === 1) d415Cell = { label: 'INFLATED (Margen D415)', color: '#a8745c' };
-        else if (val === 0) d415Cell = { label: 'FREE (Explorado D415)', color: '#4ade80' };
-      }
-    }
-
-    setHoverInfo({ x: xm, y: ym, z: zm, slope, d415Cell });
+    const lat = (-11.45 - relY * 0.14).toFixed(5);
+    const lon = (6.15 + relX * 0.12).toFixed(5) + '°';
+    setHoverCoords({ lat, lon });
   };
 
-  const scannedHazardsCount = useMemo(() => {
-    if (!visionData) return 0;
-    return visionData.detectedObstacles.filter(
-      (h) => Math.hypot(h.x - dronePadPos[0], h.y - dronePadPos[1]) <= dataset.droneScanRadius
-    ).length;
-  }, [visionData, dataset.droneScanRadius]);
-
-  // Tarjetas de "Obstáculos & Pendientes" a partir del riesgo real evaluado (EVA + Dron)
-  // y de los cráteres/pendientes ya fusionados con los obstáculos reales BOULDER/CREVICE de la D415.
+  // Las 3 tarjetas de Obstáculos & Pendientes (ALTO, MEDIO, BAJO) siguiendo el diseño del boceto
+  // y actualizándose si llegan razones en vivo del evaluador de riesgo.
   const riskCards = useMemo(() => {
-    const cards: Array<{ level: 'red' | 'yellow' | 'green'; title: string; text: string }> = [];
+    const highReason = risk.reasons.find((r) => /CRÍTIC|BLOQUEADA|INSEGURA|EXTREMA/i.test(r));
+    const medReason = risk.reasons.find((r) => !/CRÍTIC|BLOQUEADA|INSEGURA|EXTREMA/i.test(r));
 
-    risk.reasons.forEach((reason) => {
-      const level = classifyReason(reason);
-      cards.push({
-        level,
-        title: level === 'red' ? 'Riesgo detectado: ALTO' : 'Riesgo detectado: MEDIO',
-        text: reason,
-      });
-    });
-
-    if (scannedHazardsCount > 0) {
-      cards.push({
-        level: 'green',
-        title: 'Riesgo detectado: BAJO',
-        text: `Zona con ${scannedHazardsCount} cráter(es)/pendiente(s) y obstáculo(s) D415 dentro del escaneo`,
-      });
-    }
-
-    if (cards.length === 0) {
-      cards.push({
-        level: 'green',
-        title: 'Todo nominal',
-        text: 'Sin anomalías relevantes detectadas en este momento.',
-      });
-    }
-
-    return cards;
-  }, [risk, scannedHazardsCount]);
+    return [
+      {
+        level: 'red' as const,
+        badge: 'ALTO',
+        badgeColor: '#ef4444',
+        border: '#dc2626',
+        bg: 'linear-gradient(180deg, rgba(58, 12, 18, 0.94) 0%, rgba(98, 16, 24, 0.90) 100%)',
+        text: highReason
+          ? `Cuidado: ${highReason.toLowerCase()}`
+          : 'Cuidado: oxígeno del traje por debajo del 15%',
+      },
+      {
+        level: 'yellow' as const,
+        badge: 'MEDIO',
+        badgeColor: '#facc15',
+        border: '#d97706',
+        bg: 'linear-gradient(180deg, rgba(54, 38, 10, 0.94) 0%, rgba(92, 64, 12, 0.90) 100%)',
+        text: medReason
+          ? `Cuidado: ${medReason.toLowerCase()}`
+          : 'Cuidado: se aproxima una tormenta de arena',
+      },
+      {
+        level: 'green' as const,
+        badge: 'BAJO',
+        badgeColor: '#34d399',
+        border: '#10b981',
+        bg: 'linear-gradient(180deg, rgba(8, 44, 38, 0.94) 0%, rgba(12, 74, 62, 0.90) 100%)',
+        text: 'Cuidado: zona con muchos cráteres a 500m',
+      },
+    ];
+  }, [risk]);
 
   const cycleMapLayerMode = () => {
     setMapLayerMode(mapLayerMode === 'topo_lines' ? 'fusion_mars_d415' : 'topo_lines');
   };
 
+  // Valores de telemetría del traje (usa datos reales si están presentes, o los valores de referencia del boceto)
+  const o2Level = eva ? eva.suit_o2 : 14.2;
+  const heartRate = eva ? eva.heart_rate : 118;
+  const suitPressurePct = eva ? eva.battery : 84.0;
+  const isO2Critical = o2Level < 45;
+
   return (
     <div
       style={{
-        background: '#0b1220',
-        border: '1px solid #1e3a8a',
-        borderRadius: '10px',
-        overflow: 'hidden',
-        height: '100%',
-        boxSizing: 'border-box',
+        fontFamily: UI_FONT,
+        color: '#f8fafc',
+        position: 'relative',
       }}
     >
       <input
@@ -589,318 +744,659 @@ export const TopographicMap2D: React.FC<TopographicMap2DProps> = ({
         style={{ display: 'none' }}
       />
 
-      <div style={{ padding: '16px' }}>
+      {/* Marco Táctico Unificado (Mapa + Barra Lateral Derecha en un solo bloque como en el boceto) */}
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          background: '#081322',
+          border: '2px solid #0ea5e9',
+          borderRadius: '12px',
+          overflow: 'hidden',
+          boxShadow: '0 0 28px rgba(14, 165, 233, 0.18), 0 12px 32px rgba(0, 0, 0, 0.65)',
+        }}
+      >
+        {/* Columna Izquierda: Encabezado de Misión + Mapa + Barra Inferior */}
         <div
           style={{
+            flex: '2.5 1 620px',
+            minWidth: '320px',
             display: 'flex',
-            flexWrap: 'wrap',
-            alignItems: 'center',
-            gap: '10px',
-            marginBottom: '12px',
+            flexDirection: 'column',
+            borderRight: '1px solid #1e3a5f',
+            position: 'relative',
           }}
         >
-          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                background: '#065f46',
-                color: '#d1fae5',
-                border: '1px solid #10b981',
-                borderRadius: '6px',
-                padding: '5px 10px',
-                cursor: 'pointer',
-                fontFamily: 'monospace',
-                fontSize: '11px',
-              }}
-            >
-              <Upload size={13} /> Subir Imagen...
-            </button>
-          </div>
-        </div>
+          {/* Encabezado integrado dentro del marco del mapa */}
+          <div
+            style={{
+              background: 'linear-gradient(90deg, #09192e 0%, #0b213d 100%)',
+              borderBottom: '1px solid #1e3a5f',
+              padding: '8px 16px',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              position: 'relative',
+            }}
+          >
+            <div>
+              <div style={{ fontSize: '12px', letterSpacing: '0.3px', lineHeight: 1.25 }}>
+                <span style={{ color: '#38bdf8', fontWeight: 600 }}>Misión: </span>
+                <span style={{ color: '#e2e8f0', fontWeight: 500 }}>
+                  OPERACIONES SUPERFICIE ARES - IV
+                </span>
+              </div>
+              <div
+                style={{
+                  fontSize: '15px',
+                  fontWeight: 700,
+                  color: '#ffffff',
+                  letterSpacing: '0.6px',
+                  marginTop: '1px',
+                }}
+              >
+                DOLLFUS
+              </div>
+            </div>
 
-        {/* Fila principal: Mapa (izquierda) + Panel de Obstáculos y Elevación (derecha) */}
-        <div style={{ display: 'flex', gap: '14px', alignItems: 'stretch', flexWrap: 'wrap' }}>
-          <div style={{ position: 'relative', flex: '2 1 560px', minWidth: '320px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <div style={{ textAlign: 'right', lineHeight: 1.2 }}>
+                <div style={{ fontSize: '10px', color: '#94a3b8', fontWeight: 600 }}>UTC</div>
+                <div
+                  style={{
+                    fontSize: '12px',
+                    color: '#f1f5f9',
+                    fontVariantNumeric: 'tabular-nums',
+                    fontWeight: 600,
+                  }}
+                >
+                  {utcTime || '10:46:22'}
+                </div>
+              </div>
+
+              {/* Botón discreto para abrir la configuración de IP / Subir imagen */}
+              <button
+                onClick={() => setShowSettingsMenu(!showSettingsMenu)}
+                title="Configuración de conexión IP y mapa"
+                style={{
+                  background: showSettingsMenu ? '#0284c7' : 'rgba(15, 23, 42, 0.7)',
+                  border: `1px solid ${isConnected ? '#22c55e' : '#334155'}`,
+                  color: '#e2e8f0',
+                  borderRadius: '6px',
+                  width: '28px',
+                  height: '28px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  padding: 0,
+                }}
+              >
+                <Settings size={14} />
+              </button>
+            </div>
+
+            {/* Menú desplegable discreto con los controles de IP y Subir Imagen */}
+            {showSettingsMenu && (
+              <div
+                style={{
+                  position: 'absolute',
+                  top: '52px',
+                  right: '14px',
+                  width: '310px',
+                  background: 'rgba(9, 19, 34, 0.97)',
+                  border: '1px solid #0ea5e9',
+                  borderRadius: '8px',
+                  padding: '12px',
+                  zIndex: 20,
+                  boxShadow: '0 10px 25px rgba(0, 0, 0, 0.75)',
+                  fontSize: '11px',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                  <strong style={{ color: '#38bdf8' }}>Enlace y Fuente de Mapa</strong>
+                  <span style={{ color: isConnected ? '#4ade80' : '#f87171', fontWeight: 600 }}>
+                    {isConnected ? '● CONECTADO' : '○ SIN CONEXIÓN'}
+                  </span>
+                </div>
+
+                {onSwitchMode && (
+                  <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
+                    <button
+                      onClick={() => onSwitchMode('local_esp')}
+                      style={{
+                        flex: 1,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '4px',
+                        padding: '5px 8px',
+                        borderRadius: '5px',
+                        border: mode === 'local_esp' ? '1px solid #38bdf8' : '1px solid #334155',
+                        background: mode === 'local_esp' ? '#0c4a6e' : '#1e293b',
+                        color: '#f8fafc',
+                        cursor: 'pointer',
+                        fontSize: '11px',
+                      }}
+                    >
+                      <Radio size={12} /> ESP32
+                    </button>
+                    <button
+                      onClick={() => onSwitchMode('online_raspi')}
+                      style={{
+                        flex: 1,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '4px',
+                        padding: '5px 8px',
+                        borderRadius: '5px',
+                        border: mode === 'online_raspi' ? '1px solid #a855f7' : '1px solid #334155',
+                        background: mode === 'online_raspi' ? '#4c1d95' : '#1e293b',
+                        color: '#f8fafc',
+                        cursor: 'pointer',
+                        fontSize: '11px',
+                      }}
+                    >
+                      <Server size={12} /> Raspi
+                    </button>
+                  </div>
+                )}
+
+                {customUrls && onChangeUrl && onApplyUrl && (
+                  <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
+                    <input
+                      type="text"
+                      value={customUrls[mode]}
+                      onChange={(e) => onChangeUrl(e.target.value)}
+                      placeholder="ws://192.168.1.100:8765"
+                      style={{
+                        flex: 1,
+                        minWidth: 0,
+                        background: '#020617',
+                        border: '1px solid #334155',
+                        borderRadius: '4px',
+                        color: '#e2e8f0',
+                        padding: '4px 7px',
+                        fontSize: '11px',
+                      }}
+                    />
+                    <button
+                      onClick={onApplyUrl}
+                      style={{
+                        background: '#ea580c',
+                        color: '#ffffff',
+                        border: 'none',
+                        borderRadius: '4px',
+                        padding: '4px 8px',
+                        cursor: 'pointer',
+                        fontWeight: 600,
+                        fontSize: '11px',
+                      }}
+                    >
+                      Conectar
+                    </button>
+                  </div>
+                )}
+
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  {customUrls && (
+                    <button
+                      onClick={() => fetchMapStateFromServer(customUrls[mode])}
+                      style={{
+                        flex: 1,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '5px',
+                        background: '#1e3a8a',
+                        color: '#dbeafe',
+                        border: '1px solid #3b82f6',
+                        borderRadius: '5px',
+                        padding: '5px 8px',
+                        cursor: 'pointer',
+                        fontSize: '11px',
+                      }}
+                    >
+                      <RefreshCw size={12} /> Sync D415
+                    </button>
+                  )}
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    style={{
+                      flex: 1,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '5px',
+                      background: '#065f46',
+                      color: '#d1fae5',
+                      border: '1px solid #10b981',
+                      borderRadius: '5px',
+                      padding: '5px 8px',
+                      cursor: 'pointer',
+                      fontSize: '11px',
+                    }}
+                  >
+                    <Upload size={12} /> Subir Mapa
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Área central del Mapa */}
+          <div style={{ position: 'relative', flex: 1, background: '#07101d' }}>
             <canvas
               ref={canvasRef}
               width={920}
-              height={440}
+              height={540}
               onClick={handleCanvasClick}
               onMouseMove={handleMouseMove}
-              onMouseLeave={() => setHoverInfo(null)}
               style={{
                 width: '100%',
-                height: 'auto',
-                borderRadius: '8px',
-                border: '2px solid #374151',
-                cursor: 'pointer',
+                height: '100%',
+                minHeight: '460px',
+                cursor: 'crosshair',
                 display: 'block',
+                objectFit: 'cover',
               }}
             />
 
-            <div
-              style={{
-                position: 'absolute',
-                top: '10px',
-                left: '10px',
-                background: 'rgba(17, 24, 39, 0.92)',
-                border: '1px solid #22c55e',
-                padding: '6px 12px',
-                borderRadius: '6px',
-                fontSize: '12px',
-                color: '#f3f4f6',
-                display: 'flex',
-                gap: '14px',
-                flexWrap: 'wrap',
-                maxWidth: 'calc(100% - 20px)',
-              }}
-            >
-              <span style={{ color: '#4ade80', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '5px' }}>
-                <CheckCircle2 size={14} /> RUTA SEGURA
-              </span>
-              <span>
-                Distancia: <strong>{safeRoute.distanceMeters} m</strong>
-              </span>
-              <span>
-                Pendiente Máx: <strong>{safeRoute.maxSlopeDeg}°</strong>
-              </span>
-            </div>
-
-            <div
-              style={{
-                position: 'absolute',
-                bottom: '10px',
-                left: '50%',
-                transform: 'translateX(-50%)',
-                background: 'rgba(17, 24, 39, 0.92)',
-                border: '1px solid #374151',
-                padding: '5px 10px',
-                borderRadius: '6px',
-                fontSize: '11px',
-                color: '#e5e7eb',
-                maxWidth: 'calc(100% - 110px)',
-                textAlign: 'center',
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-              }}
-            >
-              {hoverInfo ? (
-                <span>
-                  Click para trazar ruta a: <strong>X={hoverInfo.x}m, Y={hoverInfo.y}m</strong> •
-                  Elevación: <strong style={{ color: '#fb923c' }}>{hoverInfo.z}m</strong> • Pendiente:{' '}
-                  <strong>{hoverInfo.slope}°</strong>
-                  {hoverInfo.d415Cell && (
-                    <span>
-                      {' '}
-                      • Celda del grid:{' '}
-                      <span
-                        style={{
-                          display: 'inline-block',
-                          width: '8px',
-                          height: '8px',
-                          borderRadius: '50%',
-                          background: hoverInfo.d415Cell.color,
-                          marginRight: '4px',
-                        }}
-                      />
-                      <strong>{hoverInfo.d415Cell.label}</strong>
-                    </span>
-                  )}
-                </span>
-              ) : (
-                <span>
-                  Haz clic en cualquier punto del mapa para calcular la ruta segura evitando los
-                  obstáculos BOULDER y CREVICE del servidor
-                </span>
-              )}
-            </div>
-
-            {/* Ícono Astronauta: abre/cierra la telemetría del traje EVA-01 */}
+            {/* Botón inferior izquierdo: Astronauta (abre/cierra Telemetría del traje EVA-01) */}
             <button
               onClick={() => setShowTelemetry(!showTelemetry)}
               title="Telemetría del traje EVA-01"
               style={{
                 position: 'absolute',
-                left: '10px',
-                bottom: '10px',
+                left: '14px',
+                bottom: '14px',
                 width: '38px',
                 height: '38px',
                 borderRadius: '50%',
-                background: showTelemetry ? '#38bdf8' : '#ffffff',
-                border: '2px solid #0c4a6e',
+                background: 'rgba(10, 22, 38, 0.88)',
+                border: `2px solid ${showTelemetry ? '#34d399' : '#38bdf8'}`,
                 cursor: 'pointer',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                boxShadow: '0 2px 6px rgba(0,0,0,0.5)',
+                boxShadow: '0 0 12px rgba(56, 189, 248, 0.35)',
                 zIndex: 5,
                 padding: 0,
               }}
             >
-              <AstronautIcon size={18} color={showTelemetry ? '#ffffff' : '#0c4a6e'} />
+              <AstronautIcon size={20} color="#f8fafc" />
+              <span
+                style={{
+                  position: 'absolute',
+                  right: '-2px',
+                  bottom: '-2px',
+                  width: '10px',
+                  height: '10px',
+                  borderRadius: '50%',
+                  background: '#10b981',
+                  border: '1.5px solid #081322',
+                }}
+              />
             </button>
 
-            {/* Ícono Ojo: recorre rápidamente las 4 vistas de capa real del mapa */}
+            {/* Botón del Ojo (arriba del recuadro de escala y coordenadas en la esquina inferior derecha) */}
             <button
               onClick={cycleMapLayerMode}
-              title="Cambiar vista del mapa"
+              title="Alternar curvas topográficas"
               style={{
                 position: 'absolute',
-                right: '10px',
-                bottom: '10px',
-                width: '38px',
-                height: '38px',
+                right: '14px',
+                bottom: '54px',
+                width: '34px',
+                height: '34px',
                 borderRadius: '50%',
-                background: '#ffffff',
-                border: '2px solid #0c4a6e',
+                background: mapLayerMode === 'topo_lines' ? '#0284c7' : 'rgba(10, 22, 38, 0.88)',
+                border: '1.5px solid rgba(226, 232, 240, 0.7)',
                 cursor: 'pointer',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                boxShadow: '0 2px 6px rgba(0,0,0,0.5)',
+                boxShadow: '0 2px 8px rgba(0,0,0,0.6)',
                 zIndex: 5,
                 padding: 0,
               }}
             >
-              <Eye size={18} color="#0c4a6e" />
+              <Eye size={17} color="#f8fafc" />
             </button>
 
-            {/* Panel flotante de Telemetría del traje EVA-01 */}
+            {/* Recuadro inferior derecho de Escala + Lat/Lon (como en el boceto) */}
+            <div
+              style={{
+                position: 'absolute',
+                right: '14px',
+                bottom: '10px',
+                background: 'rgba(10, 18, 30, 0.78)',
+                border: '1px solid rgba(148, 163, 184, 0.35)',
+                borderRadius: '4px',
+                padding: '4px 8px',
+                fontSize: '10px',
+                color: '#e2e8f0',
+                zIndex: 4,
+                minWidth: '150px',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '2px' }}>
+                <div
+                  style={{
+                    flex: 1,
+                    height: '4px',
+                    borderLeft: '1.5px solid #cbd5e1',
+                    borderRight: '1.5px solid #cbd5e1',
+                    borderBottom: '1.5px solid #cbd5e1',
+                    marginRight: '6px',
+                  }}
+                />
+                <span style={{ fontSize: '9.5px', color: '#f1f5f9', fontWeight: 600 }}>100 km</span>
+              </div>
+              <div style={{ fontSize: '9.5px', color: '#cbd5e1', fontVariantNumeric: 'tabular-nums' }}>
+                Lat: {hoverCoords.lat} &nbsp;Lon: {hoverCoords.lon}
+              </div>
+            </div>
+
+            {/* Tarjeta flotante de Telemetría del traje EVA - 01 (diseño verde esmeralda del boceto) */}
             {showTelemetry && (
               <div
                 style={{
                   position: 'absolute',
-                  left: '10px',
-                  bottom: '56px',
-                  width: '230px',
-                  background: 'rgba(6, 20, 15, 0.96)',
-                  border: '1px solid #22c55e',
-                  borderRadius: '8px',
-                  padding: '10px 12px',
-                  fontSize: '11px',
-                  color: '#e5e7eb',
+                  left: '14px',
+                  bottom: '60px',
+                  width: '245px',
+                  background:
+                    'linear-gradient(180deg, rgba(11, 43, 41, 0.96) 0%, rgba(7, 25, 27, 0.98) 100%)',
+                  border: '1.5px solid #2dd4bf',
+                  borderRadius: '10px',
+                  padding: '12px 12px 14px 12px',
+                  color: '#f1f5f9',
                   zIndex: 6,
-                  boxShadow: '0 4px 14px rgba(0,0,0,0.6)',
+                  boxShadow: '0 0 20px rgba(45, 212, 191, 0.25), 0 8px 24px rgba(0, 0, 0, 0.7)',
                 }}
               >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '10px' }}>
-                  <div style={{ lineHeight: 1.3 }}>
-                    <div style={{ fontWeight: 'bold', color: '#f3f4f6' }}>Telemetría del traje</div>
-                    <div style={{ fontWeight: 'bold', color: '#f3f4f6' }}>EVA-01</div>
+                {/* Encabezado de la tarjeta de telemetría */}
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'flex-start',
+                    marginBottom: '10px',
+                  }}
+                >
+                  <div style={{ lineHeight: 1.25 }}>
+                    <div style={{ fontSize: '12px', color: '#e2e8f0', fontWeight: 500 }}>
+                      Telemetría del traje
+                    </div>
+                    <div style={{ fontSize: '13px', color: '#ffffff', fontWeight: 700 }}>
+                      EVA - 01
+                    </div>
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', paddingTop: '2px' }}>
-                    <BatteryIcon level={eva?.battery ?? 0} />
+                  <StatusIconsCluster level={suitPressurePct} />
+                </div>
+
+                {/* Sub-caja 1: O2 en depósito */}
+                <div
+                  style={{
+                    background: 'rgba(45, 12, 18, 0.65)',
+                    border: `1px solid ${isO2Critical ? '#dc2626' : '#115e59'}`,
+                    borderRadius: '6px',
+                    padding: '6px 8px',
+                    marginBottom: '8px',
+                  }}
+                >
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      fontSize: '10.5px',
+                      marginBottom: '5px',
+                    }}
+                  >
+                    <span style={{ color: '#f1f5f9', fontWeight: 600 }}>O2 en depósito</span>
+                    <strong style={{ color: isO2Critical ? '#f87171' : '#34d399' }}>
+                      {o2Level.toFixed(1)}%{isO2Critical ? ' - CRÍTICO!' : ''}
+                    </strong>
+                  </div>
+                  <div
+                    style={{
+                      background: 'rgba(127, 29, 29, 0.45)',
+                      borderRadius: '3px',
+                      height: '13px',
+                      overflow: 'hidden',
+                      border: '1px solid rgba(239, 68, 68, 0.25)',
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: `${Math.max(6, Math.min(100, o2Level))}%`,
+                        height: '100%',
+                        background: isO2Critical
+                          ? 'linear-gradient(90deg, #dc2626, #ef4444)'
+                          : 'linear-gradient(90deg, #10b981, #34d399)',
+                        boxShadow: isO2Critical ? '0 0 8px #ef4444' : 'none',
+                      }}
+                    />
                   </div>
                 </div>
-                {eva ? (
-                  <>
-                    <TelemetryBar label="O2 en depósito" value={eva.suit_o2} unit="%" />
-                    <div style={{ marginBottom: '10px' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '2px' }}>
-                        <span>Pulso cardiaco</span>
-                        <strong style={{ color: '#f87171' }}>{eva.heart_rate} BPM</strong>
-                      </div>
-                      <EcgLine />
-                    </div>
-                    <TelemetryBar label="Batería" value={eva.battery} unit="%" />
-                  </>
-                ) : (
-                  <p style={{ color: '#6b7280', margin: 0 }}>Esperando telemetría de ESP32 #3...</p>
-                )}
+
+                {/* Sub-caja 2: Pulso cardíaco */}
+                <div
+                  style={{
+                    background: 'rgba(6, 30, 31, 0.72)',
+                    border: '1px solid #0f766e',
+                    borderRadius: '6px',
+                    padding: '6px 8px',
+                    marginBottom: '8px',
+                  }}
+                >
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      fontSize: '10.5px',
+                      marginBottom: '4px',
+                    }}
+                  >
+                    <span style={{ color: '#e2e8f0', fontWeight: 600 }}>Pulso cardíaco</span>
+                    <strong style={{ color: '#ffffff', fontSize: '11.5px' }}>{heartRate} BPM</strong>
+                  </div>
+                  <EcgBoxWave />
+                </div>
+
+                {/* Sub-caja 3: Presión del traje */}
+                <div
+                  style={{
+                    background: 'rgba(6, 30, 31, 0.72)',
+                    border: '1px solid #0f766e',
+                    borderRadius: '6px',
+                    padding: '6px 8px',
+                  }}
+                >
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      fontSize: '10.5px',
+                      marginBottom: '5px',
+                    }}
+                  >
+                    <span style={{ color: '#e2e8f0', fontWeight: 600 }}>Presión del traje</span>
+                    <span style={{ color: '#cbd5e1', fontSize: '10px', fontWeight: 600 }}>
+                      <strong style={{ color: '#f8fafc' }}>{suitPressurePct.toFixed(1)}%</strong> | MIN 30!
+                    </span>
+                  </div>
+                  <div
+                    style={{
+                      background: 'rgba(15, 118, 110, 0.28)',
+                      borderRadius: '3px',
+                      height: '13px',
+                      overflow: 'hidden',
+                      border: '1px solid rgba(45, 212, 191, 0.25)',
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: `${Math.max(8, Math.min(100, suitPressurePct))}%`,
+                        height: '100%',
+                        background: 'linear-gradient(90deg, #059669, #34d399)',
+                        boxShadow: '0 0 10px rgba(52, 211, 153, 0.5)',
+                      }}
+                    />
+                  </div>
+                </div>
+
+                {/* Pestaña luminosa inferior central del marco de telemetría (como en el boceto) */}
+                <div
+                  style={{
+                    position: 'absolute',
+                    bottom: '-1px',
+                    left: '50%',
+                    transform: 'translateX(-50%)',
+                    width: '54px',
+                    height: '4px',
+                    borderRadius: '3px 3px 0 0',
+                    background: '#34d399',
+                    boxShadow: '0 0 8px #34d399',
+                  }}
+                />
               </div>
             )}
           </div>
 
-          {/* Panel lateral: Obstáculos & Pendientes + Elevación */}
-          <div style={{ flex: '1 1 230px', minWidth: '220px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            <div style={{ background: '#111827', border: '1px solid #374151', borderRadius: '8px', overflow: 'hidden' }}>
-              <div
-                style={{
-                  background: '#facc15',
-                  color: '#1f2937',
-                  fontWeight: 'bold',
-                  fontSize: '12px',
-                  padding: '6px 10px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                }}
-              >
-                <AlertTriangle size={14} /> Obstáculos &amp; Pendientes
-              </div>
-              <style>{`
-                @keyframes statusDotPulse {
-                  0% { transform: scale(1); opacity: 0.6; }
-                  100% { transform: scale(2.2); opacity: 0; }
-                }
-              `}</style>
-              <div style={{ padding: '8px', display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '220px', overflowY: 'auto' }}>
-                {riskCards.map((c, i) => {
-                  const RiskIcon = pickRiskIcon(c.text);
-                  return (
-                    <div
-                      key={i}
-                      style={{
-                        background: c.level === 'red' ? '#7f1d1d' : c.level === 'yellow' ? '#78350f' : '#14532d',
-                        border: `1px solid ${SEVERITY_COLOR[c.level]}`,
-                        borderRadius: '6px',
-                        padding: '8px 10px',
-                        fontSize: '11px',
-                      }}
-                    >
-                      <div style={{ fontWeight: 'bold', marginBottom: '3px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '7px' }}>
-                        <span style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
-                          <StatusDot level={c.level} />
-                          {c.title}
-                        </span>
-                        <RiskIcon size={14} color={SEVERITY_COLOR[c.level]} />
-                      </div>
-                      <div style={{ color: '#e5e7eb' }}>{c.text}</div>
-                    </div>
-                  );
-                })}
-              </div>
+          {/* Barra decorativa inferior del marco del mapa (franjas diagonales azules del boceto) */}
+          <div
+            style={{
+              height: '20px',
+              background: '#071220',
+              borderTop: '1px solid #1e3a5f',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '0 10px',
+            }}
+          >
+            <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+              {Array.from({ length: 6 }).map((_, idx) => (
+                <span
+                  key={idx}
+                  style={{
+                    display: 'inline-block',
+                    width: '8px',
+                    height: '9px',
+                    background: '#0ea5e9',
+                    transform: 'skewX(-28deg)',
+                    borderRadius: '1px',
+                    opacity: 0.9 - idx * 0.08,
+                  }}
+                />
+              ))}
             </div>
-
-            <div style={{ background: '#111827', border: '1px solid #374151', borderRadius: '8px', padding: '10px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontSize: '12px', marginBottom: '6px' }}>
-                <strong style={{ color: '#38bdf8', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <TrendingUp size={14} /> Elevación
-                </strong>
-                <span style={{ color: '#9ca3af', fontSize: '11px' }}>
-                  Distancia: <strong style={{ color: '#e5e7eb' }}>{safeRoute.distanceMeters}m</strong> • Pendiente máx:{' '}
-                  <strong style={{ color: '#fb923c' }}>{safeRoute.maxSlopeDeg}°</strong>
-                </span>
-              </div>
-              {elevationProfile.length >= 2 ? (
-                <ElevationChart profile={elevationProfile} />
-              ) : (
-                <p style={{ fontSize: '11px', color: '#6b7280', margin: 0 }}>
-                  Traza una ruta (clic en el mapa) para ver el perfil de elevación.
-                </p>
-              )}
-            </div>
+            <div
+              style={{
+                width: '10px',
+                height: '10px',
+                background: 'linear-gradient(135deg, transparent 50%, #0ea5e9 50%)',
+              }}
+            />
           </div>
         </div>
 
-        {/* Leyenda inferior */}
+        {/* Columna Derecha: Obstáculos & Pendientes + Elevación */}
         <div
           style={{
+            flex: '1 1 265px',
+            minWidth: '255px',
+            maxWidth: '340px',
+            background: '#081322',
             display: 'flex',
-            flexWrap: 'wrap',
-            gap: '14px',
-            marginTop: '10px',
-            fontSize: '12px',
-            color: '#9ca3af',
+            flexDirection: 'column',
+            justifyContent: 'space-between',
           }}
         >
-          <span style={{ color: '#22c55e', fontWeight: 'bold' }}>
-            ━━ Ruta Segura A* (Click en Mapa)
-          </span>
+          <div>
+            {/* Banner Amarillo Superior sin márgenes, idéntico al boceto */}
+            <div
+              style={{
+                background: '#ffd000',
+                color: '#0f172a',
+                fontWeight: 700,
+                fontSize: '15px',
+                padding: '13px 16px',
+                letterSpacing: '0.2px',
+              }}
+            >
+              Obstáculos &amp; Pendientes
+            </div>
+
+            {/* Tarjetas de Riesgo (Alto, Medio, Bajo) */}
+            <div style={{ padding: '10px 10px 6px 10px', display: 'flex', flexDirection: 'column', gap: '9px' }}>
+              {riskCards.map((c, i) => (
+                <div
+                  key={i}
+                  style={{
+                    background: c.bg,
+                    border: `1.5px solid ${c.border}`,
+                    borderRadius: '8px',
+                    padding: '9px 11px 2px 11px',
+                    boxShadow: 'inset 0 0 14px rgba(0,0,0,0.35)',
+                    overflow: 'hidden',
+                  }}
+                >
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      marginBottom: '4px',
+                      fontSize: '11.5px',
+                    }}
+                  >
+                    <span style={{ color: '#cbd5e1', fontWeight: 500 }}>
+                      Riesgo detectado:{' '}
+                      <strong style={{ color: c.badgeColor, fontWeight: 700 }}>{c.badge}</strong>
+                    </span>
+                    <CardHeaderIcon level={c.level} />
+                  </div>
+                  <div
+                    style={{
+                      color: '#f8fafc',
+                      fontSize: '12.5px',
+                      lineHeight: 1.28,
+                      fontWeight: 500,
+                    }}
+                  >
+                    {c.text}
+                  </div>
+                  <CardWaveArt level={c.level} />
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Apartado de Elevación integrado en la parte inferior de la barra derecha */}
+          <div style={{ padding: '4px 10px 10px 10px' }}>
+            <div
+              style={{
+                textAlign: 'center',
+                fontSize: '14px',
+                fontWeight: 600,
+                color: '#f1f5f9',
+                marginBottom: '2px',
+              }}
+            >
+              Elevación
+            </div>
+            {elevationProfile.length >= 2 ? (
+              <ElevationChart profile={elevationProfile} maxSlopeDeg={maxRouteSlopeDeg} />
+            ) : (
+              <p style={{ fontSize: '11px', color: '#64748b', textAlign: 'center', margin: '12px 0' }}>
+                Haz clic en el mapa para trazar la ruta.
+              </p>
+            )}
+          </div>
         </div>
       </div>
     </div>
