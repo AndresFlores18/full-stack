@@ -1,77 +1,479 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   connectBackbone,
   evaluateRisk,
   isStale,
+  setBackboneUrl,
   useBackbone,
 } from '@martian/shared';
+import {
+  BerniTopographyInput,
+  buildTopographicDataset,
+  CONNECTION_MODES,
+  OperationMode,
+} from './config/connectionConfig';
+import { TopographicMap2D } from './components/TopographicMap2D';
 
 export default function App() {
-  const { nodes, isConnected, getEva, getDrone, getStation, getSatellite } = useBackbone();
+  const { isConnected, getEva, getDrone, getStation, getSatellite } = useBackbone();
+
+  // 1. Estado del Modo de Operación: 'local_esp' (ESP32) vs 'online_raspi' (Raspberry Pi Centro de Mando)
+  const [mode, setMode] = useState<OperationMode>('local_esp');
+  const [customUrls, setCustomUrls] = useState<Record<OperationMode, string>>({
+    local_esp: CONNECTION_MODES.local_esp.defaultWsUrl,
+    online_raspi: CONNECTION_MODES.online_raspi.defaultWsUrl,
+  });
+  const [contourStep, setContourStep] = useState<number>(1.5);
+  const [showRawJson, setShowRawJson] = useState<boolean>(false);
+
+  // 2. Generador / Simulador manual del Dataset de Berni
+  const [useManualBerniOverride, setUseManualBerniOverride] = useState<boolean>(false);
+  const [manualBerniData, setManualBerniData] = useState<BerniTopographyInput>({
+    drone_pos: [1.8, 1.4, 1.6],
+    safe_path: true,
+    max_slope_deg: 14.2,
+    obstacles: [
+      { x: 1.4, y: 2.1, radius: 0.35, severity: 'medium' },
+      { x: 2.6, y: 1.5, radius: 0.45, severity: 'high' },
+    ],
+    elevation_points: [{ x: 5.5, y: 4.8, z: 6.5 }],
+  });
 
   useEffect(() => {
-    connectBackbone();
+    connectBackbone(customUrls[mode]);
   }, []);
+
+  // Cambiar entre Modo Local (ESP32) y Modo En Línea (Raspberry Pi)
+  const handleSwitchMode = (newMode: OperationMode) => {
+    setMode(newMode);
+    setBackboneUrl(customUrls[newMode]);
+  };
+
+  const handleApplyUrl = () => {
+    setBackboneUrl(customUrls[mode]);
+  };
 
   const eva = getEva();
   const drone = getDrone();
   const station = getStation();
   const satellite = getSatellite();
 
-  useEffect(() => {
-    if (Object.keys(nodes).length > 0) {
-      console.log('📡 [Web Dashboard] Datos vivos del Backbone recibidos:', nodes);
-    }
-  }, [nodes]);
+  // Fuente activa para el mapa topográfico: o el stream en vivo de Berni, o el generador manual de prueba
+  const activeDroneSource = useManualBerniOverride ? manualBerniData : drone?.data;
+  const terrainDataset = buildTopographicDataset(activeDroneSource, contourStep);
 
-  const risk = evaluateRisk(eva?.data, drone?.data);
+  const risk = evaluateRisk(eva?.data, activeDroneSource as any);
+  const activeModeConfig = CONNECTION_MODES[mode];
+
+  const customPeak = manualBerniData.elevation_points?.[0] ?? { x: 5.5, y: 4.8, z: 6.5 };
 
   return (
-    <div style={{ padding: '24px', fontFamily: 'monospace' }}>
-      <header style={{ borderBottom: '1px solid #374151', paddingBottom: '16px', marginBottom: '24px' }}>
-        <h1 style={{ margin: 0, color: '#f97316' }}>🔴 NASA Space Apps: Martian Map - Mission Control</h1>
-        <p style={{ margin: '8px 0 0 0', color: '#9ca3af' }}>
-          Dashboard Web (Andrés) • Estado Enlace:{' '}
-          <span style={{ color: isConnected ? '#22c55e' : '#ef4444', fontWeight: 'bold' }}>
-            {isConnected ? 'EN VIVO (CONECTADO)' : 'SIN CONEXIÓN'}
-          </span>
-        </p>
-      </header>
-
-      {/* Alerta de Riesgo General */}
-      <div
+    <div style={{ padding: '20px', fontFamily: 'monospace', color: '#f3f4f6', maxWidth: '1440px', margin: '0 auto' }}>
+      {/* CABECERA PRINCIPAL Y SELECTOR DE MODO (LOCAL ESP32 vs EN LÍNEA RASPBERRY PI) */}
+      <header
         style={{
-          padding: '16px',
-          borderRadius: '8px',
-          marginBottom: '24px',
-          backgroundColor:
-            risk.level === 'red' ? '#7f1d1d' : risk.level === 'yellow' ? '#78350f' : '#14532d',
-          border: `1px solid ${risk.level === 'red' ? '#ef4444' : risk.level === 'yellow' ? '#f59e0b' : '#22c55e'
-            }`,
+          borderBottom: '1px solid #374151',
+          paddingBottom: '14px',
+          marginBottom: '16px',
+          display: 'flex',
+          flexWrap: 'wrap',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: '16px',
         }}
       >
-        <h3 style={{ margin: '0 0 8px 0' }}>
+        <div>
+          <h1 style={{ margin: 0, color: '#f97316', fontSize: '22px' }}>
+            🔴 NASA Space Apps: Martian Map - Mission Control
+          </h1>
+          <p style={{ margin: '6px 0 0 0', color: '#9ca3af', fontSize: '13px' }}>
+            Dashboard Web (Andrés) • Enlace ({activeModeConfig.shortName}):{' '}
+            <span style={{ color: isConnected ? '#22c55e' : '#ef4444', fontWeight: 'bold' }}>
+              {isConnected ? 'EN VIVO (CONECTADO)' : 'SIN CONEXIÓN'}
+            </span>
+          </p>
+        </div>
+
+        {/* Selector Modular de los 2 Modos: Local (ESP32) y En Línea (Raspberry Pi) */}
+        <div
+          style={{
+            background: '#111827',
+            border: '1px solid #374151',
+            borderRadius: '8px',
+            padding: '10px 12px',
+            minWidth: '340px',
+          }}
+        >
+          <div style={{ fontSize: '11px', color: '#9ca3af', marginBottom: '6px' }}>
+            MODO DE RECEPCIÓN DE DATOS:
+          </div>
+          <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+            <button
+              onClick={() => handleSwitchMode('local_esp')}
+              style={{
+                flex: 1,
+                padding: '6px 10px',
+                borderRadius: '6px',
+                border: mode === 'local_esp' ? '2px solid #38bdf8' : '1px solid #374151',
+                background: mode === 'local_esp' ? '#0c4a6e' : '#1f2937',
+                color: '#f9fafb',
+                cursor: 'pointer',
+                fontFamily: 'monospace',
+                fontWeight: 'bold',
+                fontSize: '12px',
+              }}
+            >
+              📡 LOCAL (ESP32)
+            </button>
+            <button
+              onClick={() => handleSwitchMode('online_raspi')}
+              style={{
+                flex: 1,
+                padding: '6px 10px',
+                borderRadius: '6px',
+                border: mode === 'online_raspi' ? '2px solid #a855f7' : '1px solid #374151',
+                background: mode === 'online_raspi' ? '#4c1d95' : '#1f2937',
+                color: '#f9fafb',
+                cursor: 'pointer',
+                fontFamily: 'monospace',
+                fontWeight: 'bold',
+                fontSize: '12px',
+              }}
+            >
+              🍓 EN LÍNEA (RASPBERRY)
+            </button>
+          </div>
+
+          <div style={{ display: 'flex', gap: '6px' }}>
+            <input
+              type="text"
+              value={customUrls[mode]}
+              onChange={(e) =>
+                setCustomUrls({
+                  ...customUrls,
+                  [mode]: e.target.value,
+                })
+              }
+              style={{
+                flex: 1,
+                background: '#030712',
+                border: '1px solid #374151',
+                borderRadius: '4px',
+                color: '#e5e7eb',
+                padding: '4px 8px',
+                fontFamily: 'monospace',
+                fontSize: '12px',
+              }}
+            />
+            <button
+              onClick={handleApplyUrl}
+              style={{
+                background: '#374151',
+                color: '#f9fafb',
+                border: 'none',
+                borderRadius: '4px',
+                padding: '4px 10px',
+                cursor: 'pointer',
+                fontFamily: 'monospace',
+                fontSize: '12px',
+              }}
+            >
+              Conectar
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* ALERTA DE RIESGO GENERAL */}
+      <div
+        style={{
+          padding: '12px 16px',
+          borderRadius: '8px',
+          marginBottom: '16px',
+          backgroundColor:
+            risk.level === 'red' ? '#7f1d1d' : risk.level === 'yellow' ? '#78350f' : '#14532d',
+          border: `1px solid ${
+            risk.level === 'red' ? '#ef4444' : risk.level === 'yellow' ? '#f59e0b' : '#22c55e'
+          }`,
+        }}
+      >
+        <h3 style={{ margin: '0 0 4px 0', fontSize: '15px' }}>
           EVALUACIÓN DE RIESGO: {risk.level.toUpperCase()}
         </h3>
         {risk.reasons.length > 0 ? (
-          <ul style={{ margin: 0, paddingLeft: '20px' }}>
+          <ul style={{ margin: 0, paddingLeft: '20px', fontSize: '13px' }}>
             {risk.reasons.map((r, i) => (
               <li key={i}>{r}</li>
             ))}
           </ul>
         ) : (
-          <p style={{ margin: 0 }}>Todos los subsistemas en rango nominal.</p>
+          <p style={{ margin: 0, fontSize: '13px' }}>Todos los subsistemas en rango nominal.</p>
         )}
       </div>
 
-      {/* Grid de 4 Nodos */}
+      {/* VISTA LADO A LADO: MAPA TOPOGRÁFICO 2D (IZQUIERDA) + CONTROLES Y SLIDERS DE BERNI (DERECHA) */}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'minmax(580px, 2fr) minmax(340px, 1fr)',
+          gap: '16px',
+          alignItems: 'stretch',
+          marginBottom: '20px',
+        }}
+      >
+        {/* Columna Izquierda: Mapa Topográfico 2D */}
+        <TopographicMap2D
+          dataset={terrainDataset}
+          mode={mode}
+          isConnected={isConnected}
+          evaYaw={eva?.data?.imu?.yaw ?? 0}
+        />
+
+        {/* Columna Derecha: Controles en Vivo y Configurador del Dataset de Berni */}
+        <div
+          style={{
+            background: '#111827',
+            border: '1px solid #374151',
+            borderRadius: '10px',
+            padding: '16px',
+            display: 'flex',
+            flexDirection: 'column',
+            justifyContent: 'space-between',
+             gap: '12px',
+          }}
+        >
+          <div>
+            <h3 style={{ margin: '0 0 6px 0', color: '#a855f7', fontSize: '16px' }}>
+              ⚙️ Control de Topografía y Dataset (Berni)
+            </h3>
+            <p style={{ margin: '0 0 12px 0', fontSize: '12px', color: '#9ca3af' }}>
+              Ajusta las curvas de nivel o mueve los sliders para ver el cambio directo en el mapa de al lado.
+            </p>
+
+            {/* Selector de densidad de curvas */}
+            <div style={{ marginBottom: '12px' }}>
+              <label style={{ display: 'block', fontSize: '12px', color: '#d1d5db', marginBottom: '4px' }}>
+                Separación de curvas topográficas:
+              </label>
+              <select
+                value={contourStep}
+                onChange={(e) => setContourStep(Number(e.target.value))}
+                style={{
+                  width: '100%',
+                  background: '#1f2937',
+                  color: '#fff',
+                  border: '1px solid #4b5563',
+                  borderRadius: '6px',
+                  padding: '6px 8px',
+                  fontFamily: 'monospace',
+                  fontSize: '12px',
+                }}
+              >
+                <option value={1}>Cada 1.0 m (Alta densidad)</option>
+                <option value={1.5}>Cada 1.5 m (Estándar)</option>
+                <option value={2}>Cada 2.0 m (Ligero)</option>
+              </select>
+            </div>
+
+            {/* Botón para alternar entre Stream en Vivo vs Generador Manual */}
+            <button
+              onClick={() => setUseManualBerniOverride(!useManualBerniOverride)}
+              style={{
+                width: '100%',
+                background: useManualBerniOverride ? '#a855f7' : '#1f2937',
+                color: '#ffffff',
+                border: '1px solid #a855f7',
+                borderRadius: '6px',
+                padding: '8px 12px',
+                cursor: 'pointer',
+                fontFamily: 'monospace',
+                fontSize: '12px',
+                fontWeight: 'bold',
+                marginBottom: '12px',
+              }}
+            >
+              {useManualBerniOverride
+                ? '🧪 Modo Manual Activo (Sliders)'
+                : '📡 Stream en Vivo (Click para probar Sliders)'}
+            </button>
+
+            {/* Sliders siempre visibles al lado del mapa para mover en tiempo real */}
+            <div
+              style={{
+                background: '#1f2937',
+                padding: '12px',
+                borderRadius: '8px',
+                opacity: useManualBerniOverride ? 1 : 0.65,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '10px',
+                fontSize: '12px',
+              }}
+            >
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>Posición Dron X:</span>
+                  <strong>{manualBerniData.drone_pos[0]} m</strong>
+                </div>
+                <input
+                  type="range"
+                  min={0.5}
+                  max={4.0}
+                  step={0.1}
+                  value={manualBerniData.drone_pos[0]}
+                  onChange={(e) => {
+                    setUseManualBerniOverride(true);
+                    setManualBerniData({
+                      ...manualBerniData,
+                      drone_pos: [
+                        Number(e.target.value),
+                        manualBerniData.drone_pos[1],
+                        manualBerniData.drone_pos[2],
+                      ],
+                    });
+                  }}
+                  style={{ width: '100%' }}
+                />
+              </div>
+
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>Posición Dron Y:</span>
+                  <strong>{manualBerniData.drone_pos[1]} m</strong>
+                </div>
+                <input
+                  type="range"
+                  min={0.5}
+                  max={4.0}
+                  step={0.1}
+                  value={manualBerniData.drone_pos[1]}
+                  onChange={(e) => {
+                    setUseManualBerniOverride(true);
+                    setManualBerniData({
+                      ...manualBerniData,
+                      drone_pos: [
+                        manualBerniData.drone_pos[0],
+                        Number(e.target.value),
+                        manualBerniData.drone_pos[2],
+                      ],
+                    });
+                  }}
+                  style={{ width: '100%' }}
+                />
+              </div>
+
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>Altura / Relieve D415 (Z):</span>
+                  <strong style={{ color: '#fb923c' }}>{customPeak.z} m</strong>
+                </div>
+                <input
+                  type="range"
+                  min={-10}
+                  max={15}
+                  step={0.5}
+                  value={customPeak.z}
+                  onChange={(e) => {
+                    setUseManualBerniOverride(true);
+                    setManualBerniData({
+                      ...manualBerniData,
+                      elevation_points: [
+                        { ...customPeak, z: Number(e.target.value) },
+                      ],
+                    });
+                  }}
+                  style={{ width: '100%' }}
+                />
+              </div>
+
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>Pendiente Máx Terreno:</span>
+                  <strong>{manualBerniData.max_slope_deg}°</strong>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={35}
+                  step={0.5}
+                  value={manualBerniData.max_slope_deg}
+                  onChange={(e) => {
+                    setUseManualBerniOverride(true);
+                    setManualBerniData({
+                      ...manualBerniData,
+                      max_slope_deg: Number(e.target.value),
+                    });
+                  }}
+                  style={{ width: '100%' }}
+                />
+              </div>
+
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={manualBerniData.safe_path}
+                  onChange={(e) => {
+                    setUseManualBerniOverride(true);
+                    setManualBerniData({
+                      ...manualBerniData,
+                      safe_path: e.target.checked,
+                    });
+                  }}
+                />
+                <span>Ruta Segura (`safe_path`)</span>
+              </label>
+            </div>
+          </div>
+
+          {/* Botón para mostrar/ocultar el JSON del contrato con Berni */}
+          <div>
+            <button
+              onClick={() => setShowRawJson(!showRawJson)}
+              style={{
+                width: '100%',
+                background: '#030712',
+                color: '#9ca3af',
+                border: '1px solid #374151',
+                borderRadius: '6px',
+                padding: '6px 10px',
+                cursor: 'pointer',
+                fontFamily: 'monospace',
+                fontSize: '11px',
+              }}
+            >
+              {showRawJson ? '▲ Ocultar JSON del Dataset' : '▼ Ver JSON de Berni / Dataset'}
+            </button>
+
+            {showRawJson && (
+              <pre
+                style={{
+                  marginTop: '8px',
+                  marginBottom: 0,
+                  background: '#030712',
+                  border: '1px solid #1f2937',
+                  borderRadius: '6px',
+                  padding: '8px',
+                  fontSize: '10px',
+                  maxHeight: '150px',
+                  overflowY: 'auto',
+                  color: '#d1d5db',
+                }}
+              >
+                {JSON.stringify(activeDroneSource, null, 2)}
+              </pre>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* GRID DE LOS 4 NODOS DE TELEMETRÍA */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '16px' }}>
         {/* EVA Astronauta */}
         <div style={{ background: '#111827', padding: '16px', borderRadius: '8px', border: '1px solid #374151' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-            <h3 style={{ margin: 0, color: '#38bdf8' }}> EVA Traje (Alan)</h3>
+            <h3 style={{ margin: 0, color: '#38bdf8' }}>👨‍🚀 EVA Traje (Alan)</h3>
             <span style={{ color: isStale(eva) ? '#ef4444' : '#22c55e', fontSize: '12px' }}>
-              {isStale(eva) ? ' SIN SEÑAL' : '● ACTIVO'}
+              {isStale(eva) ? 'SIN SEÑAL' : '● ACTIVO'}
             </span>
           </div>
           {eva ? (
@@ -148,4 +550,3 @@ export default function App() {
     </div>
   );
 }
-
