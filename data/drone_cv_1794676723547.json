@@ -1,0 +1,59 @@
+{
+  "node": "drone_cv",
+  "timestamp": 1794676723,
+  "data": {
+    "altitude_m": 0.27,
+    "imu": {
+      "yaw": 0.0,
+      "pitch": 34.4,
+      "roll": 34.6
+    },
+    "max_incline_deg": 46.5,
+    "safe_corridor": false,
+    "obstacles": [
+      {
+        "id": 1,
+        "type": "BOULDER",
+        "distance_m": 0.26,
+        "bearing_deg": -6.2,
+        "height_m": 0.06
+      },
+      {
+        "id": 2,
+        "type": "CREVICE",
+        "distance_m": 0.56,
+        "bearing_deg": -10.9,
+        "depth_m": 0.12
+      },
+      {
+        "id": 3,
+        "type": "BOULDER",
+        "distance_m": 0.61,
+        "bearing_deg": 26.7,
+        "height_m": 0.19
+      },
+      {
+        "id": 4,
+        "type": "CREVICE",
+        "distance_m": 0.67,
+        "bearing_deg": 29.8,
+        "depth_m": 0.06
+      },
+      {
+        "id": 5,
+        "type": "CREVICE",
+        "distance_m": 1.41,
+        "bearing_deg": -30.3,
+        "depth_m": 0.83
+      },
+      {
+        "id": 6,
+        "type": "CREVICE",
+        "distance_m": 2.08,
+        "bearing_deg": -17.6,
+        "depth_m": 1.45
+      }
+    ],
+    "edge_fps": 6.5
+  }
+}
