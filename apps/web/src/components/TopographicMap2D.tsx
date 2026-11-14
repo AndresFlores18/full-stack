@@ -113,6 +113,119 @@ const StatusDot: React.FC<{ level: 'red' | 'yellow' | 'green' }> = ({ level }) =
   );
 };
 
+interface ElevPoint {
+  dist: number;
+  elev: number;
+  slope: number;
+}
+
+// Convierte una serie de puntos en una curva suave (cardinal spline → Bézier cúbica),
+// para que el perfil de elevación se vea como una curva real y no una línea quebrada.
+function buildSmoothPath(pts: Array<[number, number]>): string {
+  if (pts.length < 2) return '';
+  if (pts.length === 2) return `M${pts[0][0]},${pts[0][1]} L${pts[1][0]},${pts[1][1]}`;
+  let d = `M${pts[0][0]},${pts[0][1]}`;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[i - 1] ?? pts[i];
+    const p1 = pts[i];
+    const p2 = pts[i + 1];
+    const p3 = pts[i + 2] ?? p2;
+    const cp1x = p1[0] + (p2[0] - p0[0]) / 6;
+    const cp1y = p1[1] + (p2[1] - p0[1]) / 6;
+    const cp2x = p2[0] - (p3[0] - p1[0]) / 6;
+    const cp2y = p2[1] - (p3[1] - p1[1]) / 6;
+    d += ` C${cp1x.toFixed(1)},${cp1y.toFixed(1)} ${cp2x.toFixed(1)},${cp2y.toFixed(1)} ${p2[0].toFixed(1)},${p2[1].toFixed(1)}`;
+  }
+  return d;
+}
+
+const ElevationChart: React.FC<{ profile: ElevPoint[] }> = ({ profile }) => {
+  if (profile.length < 2) return null;
+
+  const W = 240;
+  const H = 110;
+  const padL = 30;
+  const padR = 10;
+  const padT = 14;
+  const padB = 18;
+
+  const maxDist = profile[profile.length - 1].dist || 1;
+  const elevs = profile.map((p) => p.elev);
+  const minE = Math.min(...elevs);
+  const maxE = Math.max(...elevs);
+  const span = Math.max(0.5, maxE - minE);
+
+  const toX = (d: number) => padL + (d / maxDist) * (W - padL - padR);
+  const toY = (e: number) => H - padB - ((e - minE) / span) * (H - padT - padB);
+
+  const points: Array<[number, number]> = profile.map((p) => [toX(p.dist), toY(p.elev)]);
+  const linePath = buildSmoothPath(points);
+  const last = points[points.length - 1];
+  const first = points[0];
+  const areaPath = `${linePath} L${last[0]},${H - padB} L${first[0]},${H - padB} Z`;
+
+  let peakIdx = 0;
+  profile.forEach((p, i) => {
+    if (p.slope > profile[peakIdx].slope) peakIdx = i;
+  });
+  const peak = profile[peakIdx];
+  const peakColor = peak.slope >= 28 ? '#ef4444' : peak.slope >= 18 ? '#f59e0b' : '#4ade80';
+  const peakPt = points[peakIdx];
+  const peakLabelX = Math.min(W - padR - 10, Math.max(padL + 10, peakPt[0]));
+  const peakLabelY = Math.max(padT - 2, peakPt[1] - 8);
+
+  const gridLevels = [maxE, (minE + maxE) / 2, minE];
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: '110px', display: 'block' }}>
+      <defs>
+        <linearGradient id="elevFillGradient" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#38bdf8" stopOpacity="0.5" />
+          <stop offset="100%" stopColor="#38bdf8" stopOpacity="0.02" />
+        </linearGradient>
+      </defs>
+
+      {gridLevels.map((lvl, i) => (
+        <g key={i}>
+          <line
+            x1={padL}
+            x2={W - padR}
+            y1={toY(lvl)}
+            y2={toY(lvl)}
+            stroke="rgba(255,255,255,0.09)"
+            strokeDasharray="2,3"
+          />
+          <text x={0} y={toY(lvl) + 3} fontSize="7.5" fill="#6b7280">
+            {lvl.toFixed(0)}m
+          </text>
+        </g>
+      ))}
+
+      <path d={areaPath} fill="url(#elevFillGradient)" stroke="none" />
+      <path d={linePath} fill="none" stroke="#38bdf8" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+
+      <circle cx={first[0]} cy={first[1]} r="2.6" fill="#38bdf8" stroke="#0b1220" strokeWidth="1" />
+      <circle cx={last[0]} cy={last[1]} r="2.6" fill="#4ade80" stroke="#0b1220" strokeWidth="1" />
+
+      {peak.slope >= 15 && (
+        <>
+          <circle cx={peakPt[0]} cy={peakPt[1]} r="3.4" fill={peakColor} stroke="#0b1220" strokeWidth="1" />
+          <text x={peakLabelX} y={peakLabelY} fontSize="8" fontWeight="bold" fill={peakColor} textAnchor="middle">
+            {peak.slope.toFixed(0)}°
+          </text>
+        </>
+      )}
+
+      <text x={padL} y={H - 4} fontSize="7.5" fill="#6b7280">
+        0m
+      </text>
+      <text x={W - padR} y={H - 4} fontSize="7.5" fill="#6b7280" textAnchor="end">
+        {maxDist.toFixed(0)}m
+      </text>
+    </svg>
+  );
+};
+
 const EcgLine: React.FC<{ color?: string }> = ({ color = '#f87171' }) => (
   <div style={{ width: '100%', height: '20px', overflow: 'hidden' }}>
     <style>{`
@@ -268,7 +381,7 @@ export const TopographicMap2D: React.FC<TopographicMap2DProps> = ({
     if (total === 0) return [];
 
     const SAMPLES = 28;
-    const profile: Array<{ dist: number; elev: number }> = [];
+    const profile: ElevPoint[] = [];
     for (let s = 0; s <= SAMPLES; s++) {
       const targetDist = (s / SAMPLES) * total;
       let acc = 0;
@@ -286,27 +399,11 @@ export const TopographicMap2D: React.FC<TopographicMap2DProps> = ({
       profile.push({
         dist: Number((targetDist * 10).toFixed(1)),
         elev: sampleMatrixAt(x, y, visionData.elevationGrid),
+        slope: sampleMatrixAt(x, y, visionData.slopeGrid),
       });
     }
     return profile;
   }, [visionData, safeRoute]);
-
-  const elevationChart = useMemo(() => {
-    if (elevationProfile.length < 2) return null;
-    const W = 220;
-    const H = 70;
-    const PAD = 4;
-    const maxDist = elevationProfile[elevationProfile.length - 1].dist || 1;
-    const elevs = elevationProfile.map((p) => p.elev);
-    const minE = Math.min(...elevs);
-    const maxE = Math.max(...elevs);
-    const span = Math.max(0.5, maxE - minE);
-    const toX = (d: number) => PAD + (d / maxDist) * (W - PAD * 2);
-    const toY = (e: number) => H - PAD - ((e - minE) / span) * (H - PAD * 2);
-    const linePts = elevationProfile.map((p) => `${toX(p.dist)},${toY(p.elev)}`).join(' ');
-    const areaPts = `${PAD},${H - PAD} ${linePts} ${W - PAD},${H - PAD}`;
-    return { W, H, linePts, areaPts, minE: minE.toFixed(1), maxE: maxE.toFixed(1) };
-  }, [elevationProfile]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -732,21 +829,12 @@ export const TopographicMap2D: React.FC<TopographicMap2DProps> = ({
                   <TrendingUp size={14} /> Elevación
                 </strong>
                 <span style={{ color: '#9ca3af', fontSize: '11px' }}>
-                  Pendiente máx: <strong style={{ color: '#fb923c' }}>{safeRoute.maxSlopeDeg}°</strong>
+                  Distancia: <strong style={{ color: '#e5e7eb' }}>{safeRoute.distanceMeters}m</strong> • Pendiente máx:{' '}
+                  <strong style={{ color: '#fb923c' }}>{safeRoute.maxSlopeDeg}°</strong>
                 </span>
               </div>
-              {elevationChart ? (
-                <>
-                  <svg viewBox={`0 0 ${elevationChart.W} ${elevationChart.H}`} style={{ width: '100%', height: '70px', display: 'block' }}>
-                    <polygon points={elevationChart.areaPts} fill="rgba(56,189,248,0.18)" />
-                    <polyline points={elevationChart.linePts} fill="none" stroke="#38bdf8" strokeWidth={1.6} />
-                  </svg>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: '#6b7280', marginTop: '2px' }}>
-                    <span>{elevationChart.minE}m</span>
-                    <span>Distancia: {safeRoute.distanceMeters}m</span>
-                    <span>{elevationChart.maxE}m</span>
-                  </div>
-                </>
+              {elevationProfile.length >= 2 ? (
+                <ElevationChart profile={elevationProfile} />
               ) : (
                 <p style={{ fontSize: '11px', color: '#6b7280', margin: 0 }}>
                   Traza una ruta (clic en el mapa) para ver el perfil de elevación.
