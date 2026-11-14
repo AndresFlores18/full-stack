@@ -22,7 +22,7 @@ export const RealSenseFeedCard: React.FC<RealSenseFeedCardProps> = ({ droneData 
           marginBottom: 10,
         }}
       >
-        <Text style={styles.panelTitle}>📷 CÁMARA REALSENSE D415 EN VIVO</Text>
+        <Text style={styles.panelTitle}>CÁMARA REALSENSE D415 EN VIVO</Text>
         <View style={{ flexDirection: 'row', gap: 8 }}>
           {(['route_map', 'rgb', 'depth'] as const).map((feedKey) => (
             <TouchableOpacity

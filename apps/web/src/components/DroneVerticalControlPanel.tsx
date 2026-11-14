@@ -44,7 +44,7 @@ export const DroneVerticalControlPanel: React.FC<DroneVerticalControlPanelProps>
     >
       <div>
         <h3 style={{ margin: '0 0 6px 0', color: '#a855f7', fontSize: '16px' }}>
-          🚁 Escaneo Vertical Dron (Berni)
+          Escaneo Vertical Dron (Berni)
         </h3>
         <p style={{ margin: '0 0 12px 0', fontSize: '12px', color: '#9ca3af' }}>
           El dron no se desplaza en X/Y: <strong>solo sube en Z, escanea el terreno y baja</strong>.
@@ -110,8 +110,8 @@ export const DroneVerticalControlPanel: React.FC<DroneVerticalControlPanelProps>
           }}
         >
           {useManualBerniOverride
-            ? '🧪 Modo Manual Activo (Sliders)'
-            : '📡 Stream en Vivo (Click para controlar altura Z)'}
+            ? 'Modo Manual Activo (Sliders)'
+            : 'Stream en Vivo (Click para controlar altura Z)'}
         </button>
 
         <div

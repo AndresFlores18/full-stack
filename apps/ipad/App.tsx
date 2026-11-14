@@ -33,7 +33,7 @@ export default function App() {
 
   useEffect(() => {
     if (Object.keys(nodes).length > 0) {
-      console.log('📱 [iPad Tactical Terminal] Datos vivos recibidos:', {
+      console.log('[iPad Tactical Terminal] Datos vivos recibidos:', {
         eva: evaData,
         drone: droneData,
       });
@@ -79,7 +79,7 @@ export default function App() {
       <View style={[styles.riskBanner, { backgroundColor: getRiskBg() }]}>
         <Text style={styles.riskTitle}>
           {stale
-            ? '⚠️ PÉRDIDA DE TELEMETRÍA (ÚLTIMO ESTADO GUARDADO)'
+            ? 'PÉRDIDA DE TELEMETRÍA (ÚLTIMO ESTADO GUARDADO)'
             : `ESTADO DE RIESGO: ${risk.level.toUpperCase()}`}
         </Text>
         {risk.reasons.length > 0 ? (

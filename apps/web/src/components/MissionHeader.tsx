@@ -1,6 +1,6 @@
 import React from 'react';
 import { Radio, RefreshCw, Satellite, Server } from 'lucide-react';
-import { fetchMapStateFromServer } from '@martian/shared';
+import { fetchMapStateFromServer, INBOUND_PORT, OUTBOUND_PORT, resolveServerEndpoints } from '@martian/shared';
 import { CONNECTION_MODES, OperationMode } from '../config/connectionConfig';
 
 interface MissionHeaderProps {
@@ -23,6 +23,7 @@ export const MissionHeader: React.FC<MissionHeaderProps> = ({
   onApplyUrl,
 }) => {
   const activeModeConfig = CONNECTION_MODES[mode];
+  const resolvedEndpoints = resolveServerEndpoints(customUrls[mode]);
 
   return (
     <header
@@ -179,6 +180,40 @@ export const MissionHeader: React.FC<MissionHeaderProps> = ({
           >
             <RefreshCw size={13} /> Sync Mapa
           </button>
+        </div>
+
+        <div
+          style={{
+            marginTop: '6px',
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: '8px',
+            fontSize: '10px',
+            fontFamily: 'monospace',
+            color: '#93c5fd',
+          }}
+        >
+          <span
+            style={{
+              background: '#082f49',
+              border: '1px solid #0284c7',
+              borderRadius: '4px',
+              padding: '2px 6px',
+            }}
+          >
+            SALIDA (Web/iPad): :{OUTBOUND_PORT} ({resolvedEndpoints.wsUrl})
+          </span>
+          <span
+            style={{
+              background: '#14532d',
+              border: '1px solid #16a34a',
+              borderRadius: '4px',
+              padding: '2px 6px',
+              color: '#bbf7d0',
+            }}
+          >
+            ENTRADA (Sensores/Raspi): :{INBOUND_PORT} ({resolvedEndpoints.ingestWsUrl})
+          </span>
         </div>
       </div>
     </header>

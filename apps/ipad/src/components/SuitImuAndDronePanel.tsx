@@ -15,7 +15,7 @@ export const SuitImuAndDronePanel: React.FC<SuitImuAndDronePanelProps> = ({
   return (
     <View style={styles.secondarySection}>
       <View style={styles.panelBox}>
-        <Text style={styles.panelTitle}>🧭 ORIENTACIÓN TRAJE (IMU)</Text>
+        <Text style={styles.panelTitle}>ORIENTACIÓN TRAJE (IMU)</Text>
         <View style={styles.imuRow}>
           <View style={styles.imuCol}>
             <Text style={styles.imuLabel}>YAW</Text>
@@ -39,7 +39,7 @@ export const SuitImuAndDronePanel: React.FC<SuitImuAndDronePanelProps> = ({
       </View>
 
       <View style={styles.panelBox}>
-        <Text style={styles.panelTitle}>🚁 TERRENO / DRON CV (D415)</Text>
+        <Text style={styles.panelTitle}>TERRENO / DRON CV (D415)</Text>
         <View style={{ marginTop: 8 }}>
           <Text style={{ color: '#d1d5db', fontSize: 16 }}>
             Corredor Seguro:{' '}

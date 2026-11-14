@@ -33,7 +33,7 @@ export const RealSenseD415Panel: React.FC<RealSenseD415PanelProps> = ({ drone })
       >
         <div>
           <h2 style={{ margin: 0, fontSize: '17px', color: '#f97316' }}>
-            📷 Intel RealSense D415 Tactical Feed & Persistent Global Map (Dataset `data/`)
+            Intel RealSense D415 Tactical Feed & Persistent Global Map (Dataset `data/`)
           </h2>
           <p style={{ margin: '4px 0 0 0', fontSize: '12px', color: '#9ca3af' }}>
             Pipeline en tiempo real: Filters → RANSAC → DBSCAN → Visual Odometry → A* & Dijkstra
@@ -55,7 +55,7 @@ export const RealSenseD415Panel: React.FC<RealSenseD415PanelProps> = ({ drone })
               fontWeight: 'bold',
             }}
           >
-            🔴 3 Cámaras D415 (Base64 Stream)
+            3 Cámaras D415 (Base64 Stream)
           </button>
           <button
             onClick={() => setSelectedHudSnapshot('hud2')}
@@ -70,7 +70,7 @@ export const RealSenseD415Panel: React.FC<RealSenseD415PanelProps> = ({ drone })
               fontSize: '12px',
             }}
           >
-            🖼️ Snapshot HUD Global (A* vs Dijkstra)
+            Snapshot HUD Global (A* vs Dijkstra)
           </button>
           <button
             onClick={() => setSelectedHudSnapshot('hud1')}
@@ -85,7 +85,7 @@ export const RealSenseD415Panel: React.FC<RealSenseD415PanelProps> = ({ drone })
               fontSize: '12px',
             }}
           >
-            🖼️ Snapshot HUD Local (v1)
+            Snapshot HUD Local (v1)
           </button>
         </div>
       </div>
