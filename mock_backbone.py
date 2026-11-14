@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-Mock Backbone Server - NASA Space Apps: Martian Map
-Transmite paquetes WebSocket cumpliendo con el Contrato JSON Oficial v1.0.
-Para pruebas inmediatas sin dependencias externas (solo Python 3 standard library).
+Mock Backbone Server - NASA Space Apps: Martian Map (Dual-Port Architecture)
+Separa el tráfico en dos puertos dedicados para evitar congestión de datos:
+  - PUERTO DE SALIDA  (8765): Exclusivo para clientes de lectura (Dashboard Web / iPad) vía WS y HTTP GET.
+  - PUERTO DE ENTRADA (8766): Exclusivo para ingesta de sensores (ESP32 / Raspberry Pi / D415) vía WS y HTTP POST.
 """
 
 import asyncio
@@ -13,14 +14,16 @@ import math
 import os
 import random
 import struct
-import sys
 import time
 import zipfile
 
-PORT = 8765
+OUTBOUND_PORT = 8765  # SALIDA: Servidor -> Clientes (Web / iPad)
+INBOUND_PORT = 8766   # ENTRADA: Sensores (ESP32 / Raspberry Pi / D415) -> Servidor
 GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
-connected_clients = set()
+outbound_clients = set()
+inbound_sensors = set()
+inbound_queue: asyncio.Queue = None  # Inicializada en main()
 
 
 def load_real_d415_frames():
@@ -43,9 +46,9 @@ def load_real_d415_frames():
                     line = line.strip()
                     if line:
                         frames.append(json.loads(line))
-            print(f"📦 [Dataset D415] Cargados {len(frames)} frames reales desde data/sample_10s_d415.zip")
+            print(f"[Dataset D415] Cargados {len(frames)} frames reales desde data/sample_10s_d415.zip")
         except Exception as e:
-            print(f"⚠️  Error leyendo sample_10s_d415.zip: {e}")
+            print(f"[WARN] Error leyendo sample_10s_d415.zip: {e}")
 
     if not frames:
         for fallback_name in ["latest_expo_payload.json", "latest_drone_cv.json", "drone_cv_1794682184211.json"]:
@@ -54,10 +57,10 @@ def load_real_d415_frames():
                 try:
                     with open(fpath, "r", encoding="utf-8") as f:
                         frames.append(json.load(f))
-                    print(f"📦 [Dataset D415] Cargado snapshot real desde data/{fallback_name}")
+                    print(f"[Dataset D415] Cargado snapshot real desde data/{fallback_name}")
                     break
                 except Exception as e:
-                    print(f"⚠️  Error leyendo {fallback_name}: {e}")
+                    print(f"[WARN] Error leyendo {fallback_name}: {e}")
 
     return frames
 
@@ -69,8 +72,7 @@ CURRENT_FRAME_INDEX = 0
 def load_real_map_state():
     """
     Carga las matrices del mapa global (occupancy_grid, cost_grid, height_map_m, slope_map_deg)
-    desde apps/web/public/data/real_map_state.json o data/latest_map_state.npz.zip
-    para servirlas por HTTP y WebSocket a cualquier IP externa.
+    desde apps/web/public/data/real_map_state.json para servirlas por el puerto de SALIDA (8765).
     """
     base_dir = os.path.dirname(os.path.abspath(__file__))
     precomputed_path = os.path.join(base_dir, "apps", "web", "public", "data", "real_map_state.json")
@@ -78,14 +80,15 @@ def load_real_map_state():
         try:
             with open(precomputed_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            print("🗺️  [Map Server] Matrices reales (120x80 occupancy_grid + cost_grid) listas para servir")
+            print("[Map Server] Matrices reales (120x80 occupancy_grid + cost_grid) listas para servir")
             return data
         except Exception as e:
-            print(f"⚠️  Error leyendo real_map_state.json: {e}")
+            print(f"[WARN] Error leyendo real_map_state.json: {e}")
     return None
 
 
 REAL_MAP_STATE = load_real_map_state()
+LATEST_INGESTED_PACKETS = {}
 
 
 def send_http_json(writer, obj, status="200 OK"):
@@ -95,7 +98,7 @@ def send_http_json(writer, obj, status="200 OK"):
         "Content-Type: application/json; charset=utf-8\r\n"
         f"Content-Length: {len(body)}\r\n"
         "Access-Control-Allow-Origin: *\r\n"
-        "Access-Control-Allow-Methods: GET, OPTIONS\r\n"
+        "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"
         "Access-Control-Allow-Headers: *\r\n"
         "Connection: close\r\n\r\n"
     ).encode("latin1")
@@ -114,7 +117,49 @@ def create_ws_frame(message: str) -> bytes:
     return header + payload
 
 
-async def handle_client(reader, writer):
+async def read_ws_frame(reader):
+    """Lee y desenmascara un frame WebSocket entrante según RFC 6455."""
+    header = await reader.readexactly(2)
+    b1, b2 = header[0], header[1]
+    opcode = b1 & 0x0F
+    masked = (b2 & 0x80) != 0
+    payload_len = b2 & 0x7F
+
+    if payload_len == 126:
+        ext = await reader.readexactly(2)
+        payload_len = struct.unpack("!H", ext)[0]
+    elif payload_len == 127:
+        ext = await reader.readexactly(8)
+        payload_len = struct.unpack("!Q", ext)[0]
+
+    mask_key = await reader.readexactly(4) if masked else None
+    raw_payload = await reader.readexactly(payload_len) if payload_len > 0 else b""
+
+    if masked and mask_key:
+        unmasked = bytearray(payload_len)
+        for i in range(payload_len):
+            unmasked[i] = raw_payload[i] ^ mask_key[i % 4]
+        raw_payload = bytes(unmasked)
+
+    return opcode, raw_payload
+
+
+def broadcast_to_outbound(packet: dict):
+    """Envía un paquete inmediatamente por el PUERTO DE SALIDA (8765) a todos los clientes Web/iPad."""
+    if not outbound_clients:
+        return
+    frame = create_ws_frame(json.dumps(packet))
+    for client in list(outbound_clients):
+        try:
+            client.write(frame)
+        except Exception:
+            outbound_clients.discard(client)
+
+
+# =====================================================================
+# 1. SERVIDOR DE SALIDA (PUERTO 8765) -> Hacia Dashboard Web / iPad
+# =====================================================================
+async def handle_outbound_client(reader, writer):
     request = b""
     while True:
         line = await reader.readline()
@@ -137,24 +182,36 @@ async def handle_client(reader, writer):
 
     key = headers.get("sec-websocket-key")
     if not key:
-        # Es una petición HTTP REST normal desde una IP externa (ej. GET /map_state.json o /latest_expo_payload.json)
         if method == "OPTIONS":
             send_http_json(writer, {"ok": True})
-        elif path in ("/map_state.json", "/data/real_map_state.json"):
+        elif path in ("/map_state.json", "/data/real_map_state.json", "/api/map-state"):
             send_http_json(writer, REAL_MAP_STATE or {})
-        elif path in ("/latest_expo_payload.json", "/latest_drone_cv.json", "/"):
-            frame = (
-                REAL_D415_FRAMES[CURRENT_FRAME_INDEX % len(REAL_D415_FRAMES)]
-                if REAL_D415_FRAMES
-                else {"node": "drone_cv", "timestamp": int(time.time()), "data": {}}
-            )
-            payload_out = dict(frame)
+        elif path in ("/latest_expo_payload.json", "/latest_drone_cv.json", "/api/d415-latest", "/"):
+            if "drone_cv" in LATEST_INGESTED_PACKETS:
+                payload_out = dict(LATEST_INGESTED_PACKETS["drone_cv"])
+            else:
+                frame = (
+                    REAL_D415_FRAMES[CURRENT_FRAME_INDEX % len(REAL_D415_FRAMES)]
+                    if REAL_D415_FRAMES
+                    else {"node": "drone_cv", "timestamp": int(time.time()), "data": {}}
+                )
+                payload_out = dict(frame)
             payload_out["node_id"] = "drone_cv"
             if REAL_MAP_STATE:
                 payload_out["map_state"] = REAL_MAP_STATE
             send_http_json(writer, payload_out)
         else:
-            send_http_json(writer, {"status": "online", "frames": len(REAL_D415_FRAMES), "has_map_state": bool(REAL_MAP_STATE)})
+            send_http_json(
+                writer,
+                {
+                    "status": "online",
+                    "role": "OUTBOUND_STREAM_SERVER",
+                    "outbound_port": OUTBOUND_PORT,
+                    "inbound_port": INBOUND_PORT,
+                    "connected_Viewers": len(outbound_clients),
+                    "connected_Sensors": len(inbound_sensors),
+                },
+            )
         await writer.drain()
         writer.close()
         try:
@@ -170,14 +227,13 @@ async def handle_client(reader, writer):
         "Connection: Upgrade\r\n"
         f"Sec-WebSocket-Accept: {accept_val}\r\n\r\n"
     )
-    writer.write(response.encode('latin1'))
+    writer.write(response.encode("latin1"))
     await writer.drain()
 
-    addr = writer.get_extra_info('peername')
-    print(f"🛰️  [Map & Telemetry Server] Cliente WS conectado desde IP: {addr}")
-    connected_clients.add(writer)
+    addr = writer.get_extra_info("peername")
+    print(f"[SALIDA :{OUTBOUND_PORT}] Cliente (Web/iPad) conectado desde: {addr}")
+    outbound_clients.add(writer)
 
-    # Enviar inmediatamente el primer paquete con map_state completo (120x80 occupancy_grid + cost_grid)
     if REAL_D415_FRAMES:
         init_frame = REAL_D415_FRAMES[CURRENT_FRAME_INDEX % len(REAL_D415_FRAMES)]
         init_packet = {
@@ -196,36 +252,141 @@ async def handle_client(reader, writer):
 
     try:
         while True:
-            header = await reader.read(2)
-            if not header or len(header) < 2:
+            opcode, _ = await read_ws_frame(reader)
+            if opcode == 0x08:  # Close
                 break
-            b1, b2 = header[0], header[1]
-            opcode = b1 & 0x0F
-            if opcode == 0x08: # Close
-                break
-            payload_len = b2 & 0x7F
-            if payload_len == 126:
-                ext = await reader.read(2)
-                payload_len = struct.unpack("!H", ext)[0]
-            elif payload_len == 127:
-                ext = await reader.read(8)
-                payload_len = struct.unpack("!Q", ext)[0]
-            
-            mask = await reader.read(4)
-            data = await reader.read(payload_len)
-            if opcode == 0x09: # Ping -> Pong
-                writer.write(struct.pack('!BB', 0x8A, 0))
+            if opcode == 0x09:  # Ping -> Pong
+                writer.write(struct.pack("!BB", 0x8A, 0))
                 await writer.drain()
     except Exception:
         pass
     finally:
-        connected_clients.discard(writer)
-        print(f"⚠️  [Backbone Mock] Cliente desconectado: {addr}")
+        outbound_clients.discard(writer)
+        print(f"[SALIDA :{OUTBOUND_PORT}] Cliente desconectado: {addr}")
         writer.close()
         try:
             await writer.wait_closed()
         except Exception:
             pass
+
+
+# =====================================================================
+# 2. SERVIDOR DE ENTRADA (PUERTO 8766) <- Desde ESP32 / Raspi / D415
+# =====================================================================
+async def handle_inbound_sensor(reader, writer):
+    global REAL_MAP_STATE
+    request = b""
+    while True:
+        line = await reader.readline()
+        request += line
+        if line == b"\r\n" or not line:
+            break
+
+    req_text = request.decode("latin1", errors="ignore")
+    lines = req_text.split("\r\n")
+    first_line = lines[0] if lines else ""
+    parts = first_line.split(" ")
+    method = parts[0] if len(parts) > 0 else "GET"
+
+    headers = {}
+    for line in lines[1:]:
+        if ": " in line:
+            k, v = line.split(": ", 1)
+            headers[k.lower()] = v.strip()
+
+    key = headers.get("sec-websocket-key")
+    if not key:
+        if method == "OPTIONS":
+            send_http_json(writer, {"ok": True})
+        elif method == "POST":
+            content_len = int(headers.get("content-length", "0") or "0")
+            raw_body = await reader.readexactly(content_len) if content_len > 0 else b"{}"
+            try:
+                packet = json.loads(raw_body.decode("utf-8"))
+                node_id = packet.get("node_id") or packet.get("node") or "external_sensor"
+                LATEST_INGESTED_PACKETS[node_id] = packet
+                if "map_state" in packet and isinstance(packet["map_state"], dict):
+                    REAL_MAP_STATE = packet["map_state"]
+                if inbound_queue is not None:
+                    inbound_queue.put_nowait(packet)
+                send_http_json(
+                    writer,
+                    {"ok": True, "ingested_node": node_id, "forwarded_to_port": OUTBOUND_PORT},
+                )
+            except Exception as e:
+                send_http_json(writer, {"ok": False, "error": str(e)}, status="400 Bad Request")
+        else:
+            send_http_json(
+                writer,
+                {
+                    "status": "online",
+                    "role": "INBOUND_SENSOR_INGEST",
+                    "inbound_port": INBOUND_PORT,
+                    "forwards_to_outbound_port": OUTBOUND_PORT,
+                    "usage": "Conecta tu ESP32/Raspi por WS a ws://<IP>:8766 o envía HTTP POST a http://<IP>:8766/api/ingest",
+                },
+            )
+        await writer.drain()
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except Exception:
+            pass
+        return
+
+    accept_val = base64.b64encode(hashlib.sha1((key + GUID).encode()).digest()).decode()
+    response = (
+        "HTTP/1.1 101 Switching Protocols\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        f"Sec-WebSocket-Accept: {accept_val}\r\n\r\n"
+    )
+    writer.write(response.encode("latin1"))
+    await writer.drain()
+
+    addr = writer.get_extra_info("peername")
+    print(f"[ENTRADA :{INBOUND_PORT}] Sensor (ESP32/Raspi/D415) conectado desde: {addr}")
+    inbound_sensors.add(writer)
+
+    try:
+        while True:
+            opcode, payload_bytes = await read_ws_frame(reader)
+            if opcode == 0x08:  # Close
+                break
+            if opcode == 0x09:  # Ping -> Pong
+                writer.write(struct.pack("!BB", 0x8A, 0))
+                await writer.drain()
+                continue
+            if opcode == 0x01 and payload_bytes:  # Text Frame JSON
+                try:
+                    packet = json.loads(payload_bytes.decode("utf-8"))
+                    node_id = packet.get("node_id") or packet.get("node") or "external_sensor"
+                    LATEST_INGESTED_PACKETS[node_id] = packet
+                    if "map_state" in packet and isinstance(packet["map_state"], dict):
+                        REAL_MAP_STATE = packet["map_state"]
+                    if inbound_queue is not None:
+                        inbound_queue.put_nowait(packet)
+                except Exception as e:
+                    print(f"[WARN] [ENTRADA :{INBOUND_PORT}] JSON inválido desde {addr}: {e}")
+    except Exception:
+        pass
+    finally:
+        inbound_sensors.discard(writer)
+        print(f"[ENTRADA :{INBOUND_PORT}] Sensor desconectado: {addr}")
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except Exception:
+            pass
+
+
+async def inbound_relay_worker():
+    """Consume los paquetes que llegan al puerto 8766 y los retransmite al puerto 8765 sin bloqueo."""
+    while True:
+        packet = await inbound_queue.get()
+        broadcast_to_outbound(packet)
+        inbound_queue.task_done()
+
 
 async def telemetry_broadcaster():
     global CURRENT_FRAME_INDEX
@@ -246,12 +407,12 @@ async def telemetry_broadcaster():
                     "orbit_pos": [
                         round(12.5 + 2.0 * math.cos(t * 0.05), 2),
                         round(45.0 + 2.0 * math.sin(t * 0.05), 2),
-                        round(250.0 + 5.0 * math.sin(t * 0.1), 1)
+                        round(250.0 + 5.0 * math.sin(t * 0.1), 1),
                     ],
                     "signal_dbm": int(-62 + random.randint(-3, 3)),
-                    "latency_ms": int(18 + random.randint(-4, 6))
+                    "latency_ms": int(18 + random.randint(-4, 6)),
                 }
-            }
+            },
         }
 
         # 2. Estación Base (ESP32 #2)
@@ -262,9 +423,9 @@ async def telemetry_broadcaster():
                 "station_esp32": {
                     "habitat_o2": round(98.4 - (step * 0.01) % 5, 1),
                     "habitat_power": round(87.0 - (step * 0.02) % 10, 1),
-                    "mesh_nodes_active": 4
+                    "mesh_nodes_active": 4,
                 }
-            }
+            },
         }
 
         # 3. Traje EVA Astronauta Alan (ESP32 #3)
@@ -281,10 +442,10 @@ async def telemetry_broadcaster():
                         "yaw": round(12.4 + 25 * math.sin(t * 0.2), 1),
                         "pitch": round(-1.2 + 8 * math.cos(t * 0.25), 1),
                         "roll": round(0.5 + 4 * math.sin(t * 0.3), 1),
-                        "accel_mag": round(3.72 + 0.5 * math.sin(t), 2)
-                    }
+                        "accel_mag": round(3.72 + 0.5 * math.sin(t), 2),
+                    },
                 }
-            }
+            },
         }
 
         # 4. Dron Real CV (Raspberry Pi 4 + RealSense D415 desde carpeta data/)
@@ -312,38 +473,44 @@ async def telemetry_broadcaster():
                         "imu": {
                             "yaw": round(0.4 + 2 * math.sin(t * 0.1), 1),
                             "pitch": round(1.1 + 1.5 * math.cos(t * 0.2), 1),
-                            "roll": round(-0.2 + 1.0 * math.sin(t * 0.3), 1)
+                            "roll": round(-0.2 + 1.0 * math.sin(t * 0.3), 1),
                         },
                         "obstacles": [
                             {"x": 1.7, "y": 2.0, "radius": 0.30, "severity": "high" if not is_safe else "medium"},
-                            {"x": 2.3, "y": 1.4, "radius": 0.25, "severity": "low"}
-                        ]
+                            {"x": 2.3, "y": 1.4, "radius": 0.25, "severity": "low"},
+                        ],
                     }
-                }
+                },
             }
 
-        if connected_clients:
-            for packet in [sat_packet, station_packet, eva_packet, drone_packet]:
-                msg = json.dumps(packet)
-                frame = create_ws_frame(msg)
-                for client in list(connected_clients):
-                    try:
-                        client.write(frame)
-                    except Exception:
-                        connected_clients.discard(client)
+        for packet in [sat_packet, station_packet, eva_packet, drone_packet]:
+            broadcast_to_outbound(packet)
+
 
 async def main():
-    server = await asyncio.start_server(handle_client, '0.0.0.0', PORT)
-    print("=================================================================")
-    print(f"🚀 NASA Space Apps - MOCK BACKBONE (Contrato JSON v1.0)")
-    print(f"📡 WebSocket Server escuchando en: ws://0.0.0.0:{PORT}")
-    print(f"   Transmitiendo: satellite_esp32, station_esp32, eva_esp32, drone_cv")
-    print("=================================================================")
-    asyncio.create_task(telemetry_broadcaster())
-    async with server:
-        await server.serve_forever()
+    global inbound_queue
+    inbound_queue = asyncio.Queue()
 
-if __name__ == '__main__':
+    outbound_server = await asyncio.start_server(handle_outbound_client, "0.0.0.0", OUTBOUND_PORT)
+    inbound_server = await asyncio.start_server(handle_inbound_sensor, "0.0.0.0", INBOUND_PORT)
+
+    print("=========================================================================")
+    print("NASA Space Apps - BACKBONE DUAL-PORT SERVER (Sin Congestión)")
+    print(f"PUERTO DE SALIDA  (Web / iPad)      : ws://0.0.0.0:{OUTBOUND_PORT}  | http://0.0.0.0:{OUTBOUND_PORT}")
+    print(f"PUERTO DE ENTRADA (Sensores / Raspi): ws://0.0.0.0:{INBOUND_PORT}  | http://0.0.0.0:{INBOUND_PORT}/api/ingest")
+    print("=========================================================================")
+
+    asyncio.create_task(inbound_relay_worker())
+    asyncio.create_task(telemetry_broadcaster())
+
+    async with outbound_server, inbound_server:
+        await asyncio.gather(
+            outbound_server.serve_forever(),
+            inbound_server.serve_forever(),
+        )
+
+
+if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
