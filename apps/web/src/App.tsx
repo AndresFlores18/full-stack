@@ -26,6 +26,7 @@ export default function App() {
   });
   const [contourStep, setContourStep] = useState<number>(1.5);
   const [showRawJson, setShowRawJson] = useState<boolean>(false);
+  const [utcTime, setUtcTime] = useState<string>('');
 
   // 2. Generador / Simulador manual del Dataset de Berni (Dron fijo en X/Y; solo sube en Z, escanea y baja)
   const [useManualBerniOverride, setUseManualBerniOverride] = useState<boolean>(false);
@@ -42,6 +43,13 @@ export default function App() {
 
   useEffect(() => {
     connectBackbone(customUrls[mode]);
+  }, []);
+
+  useEffect(() => {
+    const tick = () => setUtcTime(new Date().toISOString().substring(11, 19));
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
   }, []);
 
   const handleSwitchMode = (newMode: OperationMode) => {
@@ -68,11 +76,14 @@ export default function App() {
 
   return (
     <div style={{ padding: '20px', fontFamily: 'monospace', color: '#f3f4f6', maxWidth: '1440px', margin: '0 auto' }}>
-      {/* CABECERA PRINCIPAL Y SELECTOR DE MODO (LOCAL ESP32 vs EN LÍNEA RASPBERRY PI) */}
+      {/* CABECERA PRINCIPAL ESTILO HUD DE MISIÓN + SELECTOR DE MODO (LOCAL ESP32 vs EN LÍNEA RASPBERRY PI) */}
       <header
         style={{
-          borderBottom: '1px solid #374151',
-          paddingBottom: '14px',
+          background: 'linear-gradient(90deg, #1e3a8a, #0c4a6e)',
+          border: '1px solid #1e3a8a',
+          borderBottom: '2px solid #38bdf8',
+          borderRadius: '10px',
+          padding: '14px 18px',
           marginBottom: '16px',
           display: 'flex',
           flexWrap: 'wrap',
@@ -82,22 +93,33 @@ export default function App() {
         }}
       >
         <div>
-          <h1 style={{ margin: 0, color: '#f97316', fontSize: '22px' }}>
+          <div style={{ fontSize: '10px', color: '#bae6fd', letterSpacing: '0.5px' }}>
+            MISIÓN: OPERACIONES SUPERFICIE ARES-IV
+          </div>
+          <h1 style={{ margin: '2px 0 0 0', color: '#ffffff', fontSize: '22px' }}>
             🔴 NASA Space Apps: Martian Map - Mission Control
           </h1>
-          <p style={{ margin: '6px 0 0 0', color: '#9ca3af', fontSize: '13px' }}>
+          <p style={{ margin: '6px 0 0 0', color: '#bae6fd', fontSize: '13px' }}>
             Dashboard Web (Andrés) • Enlace ({activeModeConfig.shortName}):{' '}
-            <span style={{ color: isConnected ? '#22c55e' : '#ef4444', fontWeight: 'bold' }}>
+            <span style={{ color: isConnected ? '#4ade80' : '#fca5a5', fontWeight: 'bold' }}>
               {isConnected ? 'EN VIVO (CONECTADO)' : 'SIN CONEXIÓN'}
             </span>
           </p>
         </div>
 
+        {/* Reloj UTC en vivo */}
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: '10px', color: '#93c5fd' }}>UTC</div>
+          <div style={{ fontSize: '20px', fontWeight: 'bold', color: '#ffffff', fontFamily: 'monospace' }}>
+            {utcTime}
+          </div>
+        </div>
+
         {/* Selector Modular de los 2 Modos: Local (ESP32) y En Línea (Raspberry Pi) */}
         <div
           style={{
-            background: '#111827',
-            border: '1px solid #374151',
+            background: '#030712',
+            border: '1px solid #1e3a8a',
             borderRadius: '8px',
             padding: '10px 12px',
             minWidth: '340px',
@@ -183,56 +205,32 @@ export default function App() {
         </div>
       </header>
 
-      {/* ALERTA DE RIESGO GENERAL */}
-      <div
-        style={{
-          padding: '12px 16px',
-          borderRadius: '8px',
-          marginBottom: '16px',
-          backgroundColor:
-            risk.level === 'red' ? '#7f1d1d' : risk.level === 'yellow' ? '#78350f' : '#14532d',
-          border: `1px solid ${
-            risk.level === 'red' ? '#ef4444' : risk.level === 'yellow' ? '#f59e0b' : '#22c55e'
-          }`,
-        }}
-      >
-        <h3 style={{ margin: '0 0 4px 0', fontSize: '15px' }}>
-          EVALUACIÓN DE RIESGO: {risk.level.toUpperCase()}
-        </h3>
-        {risk.reasons.length > 0 ? (
-          <ul style={{ margin: 0, paddingLeft: '20px', fontSize: '13px' }}>
-            {risk.reasons.map((r, i) => (
-              <li key={i}>{r}</li>
-            ))}
-          </ul>
-        ) : (
-          <p style={{ margin: 0, fontSize: '13px' }}>Todos los subsistemas en rango nominal.</p>
-        )}
-      </div>
-
-      {/* VISTA LADO A LADO: MAPA TOPOGRÁFICO 2D (IZQUIERDA) + CONTROL VERTICAL DEL DRON BERNI (DERECHA) */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'minmax(580px, 2fr) minmax(340px, 1fr)',
-          gap: '16px',
-          alignItems: 'stretch',
-          marginBottom: '20px',
-        }}
-      >
-        {/* Columna Izquierda: Mapa Topográfico 2D */}
+      {/* MAPA TOPOGRÁFICO 2D: incluye su propio panel de Obstáculos & Pendientes (riesgo real) y Elevación */}
+      <div style={{ marginBottom: '16px' }}>
         <TopographicMap2D
           dataset={terrainDataset}
           mode={mode}
           isConnected={isConnected}
           evaYaw={eva?.data?.imu?.yaw ?? 0}
+          eva={eva?.data ?? null}
+          risk={risk}
+          utcTime={utcTime}
         />
+      </div>
 
-        {/* Columna Derecha: Control Vertical del Dron (Subir, Escanear y Bajar) + Dataset */}
+      {/* CONTROL VERTICAL DEL DRON BERNI (Subir, Escanear y Bajar) + Dataset */}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'minmax(0, 1fr)',
+          gap: '16px',
+          marginBottom: '20px',
+        }}
+      >
         <div
           style={{
             background: '#111827',
-            border: '1px solid #374151',
+            border: '1px solid #1e3a8a',
             borderRadius: '10px',
             padding: '16px',
             display: 'flex',
@@ -482,7 +480,7 @@ export default function App() {
       {/* GRID DE LOS 4 NODOS DE TELEMETRÍA */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '16px' }}>
         {/* EVA Astronauta */}
-        <div style={{ background: '#111827', padding: '16px', borderRadius: '8px', border: '1px solid #374151' }}>
+        <div style={{ background: '#111827', padding: '16px', borderRadius: '8px', border: '1px solid #1e3a8a' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between' }}>
             <h3 style={{ margin: 0, color: '#38bdf8' }}>👨‍🚀 EVA Traje (Alan)</h3>
             <span style={{ color: isStale(eva) ? '#ef4444' : '#22c55e', fontSize: '12px' }}>
@@ -503,7 +501,7 @@ export default function App() {
         </div>
 
         {/* Dron CV */}
-        <div style={{ background: '#111827', padding: '16px', borderRadius: '8px', border: '1px solid #374151' }}>
+        <div style={{ background: '#111827', padding: '16px', borderRadius: '8px', border: '1px solid #1e3a8a' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between' }}>
             <h3 style={{ margin: 0, color: '#a855f7' }}>🚁 Dron CV (Bernardo)</h3>
             <span style={{ color: isStale(drone) ? '#ef4444' : '#22c55e', fontSize: '12px' }}>
@@ -523,7 +521,7 @@ export default function App() {
         </div>
 
         {/* Estación Base */}
-        <div style={{ background: '#111827', padding: '16px', borderRadius: '8px', border: '1px solid #374151' }}>
+        <div style={{ background: '#111827', padding: '16px', borderRadius: '8px', border: '1px solid #1e3a8a' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between' }}>
             <h3 style={{ margin: 0, color: '#facc15' }}>🏠 Estación Base (ESP32 #2)</h3>
             <span style={{ color: isStale(station) ? '#ef4444' : '#22c55e', fontSize: '12px' }}>
@@ -542,7 +540,7 @@ export default function App() {
         </div>
 
         {/* Satélite Orbital */}
-        <div style={{ background: '#111827', padding: '16px', borderRadius: '8px', border: '1px solid #374151' }}>
+        <div style={{ background: '#111827', padding: '16px', borderRadius: '8px', border: '1px solid #1e3a8a' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between' }}>
             <h3 style={{ margin: 0, color: '#34d399' }}>🛰️ Satélite (ESP32 #1)</h3>
             <span style={{ color: isStale(satellite) ? '#ef4444' : '#22c55e', fontSize: '12px' }}>

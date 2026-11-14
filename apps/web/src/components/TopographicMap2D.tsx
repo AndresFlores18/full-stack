@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { EvaData, RiskAssessment, THRESHOLDS } from '@martian/shared';
 import {
   analyzeImageTerrainReal,
   computeSafeRouteFromImageVision,
@@ -14,12 +15,49 @@ interface TopographicMap2DProps {
   mode: OperationMode;
   isConnected: boolean;
   evaYaw?: number;
+  eva?: EvaData | null;
+  risk: RiskAssessment;
+  utcTime?: string;
 }
 
 type RouteOrigin = 'eva' | 'base';
+type MapVisualStyle = 'satellite' | 'topo_neon';
 
 const GRID_COLS = 96;
 const GRID_ROWS = 60;
+
+// Las razones "fuertes" del evaluador de riesgo van siempre en MAYÚSCULAS (CRÍTICO/BLOQUEADA/EXTREMA);
+// las de advertencia van en minúsculas. Reutilizamos esa convención para colorear cada tarjeta.
+const RED_MARKERS = /CRÍTIC|BLOQUEADA|INSEGURA|EXTREMA/i;
+function classifyReason(reason: string): 'red' | 'yellow' {
+  return RED_MARKERS.test(reason) ? 'red' : 'yellow';
+}
+
+const TelemetryBar: React.FC<{
+  label: string;
+  value: number;
+  unit: string;
+  critical: number;
+  warning: number;
+}> = ({ label, value, unit, critical, warning }) => {
+  const color = value <= critical ? '#ef4444' : value <= warning ? '#f59e0b' : '#22c55e';
+  const pct = Math.max(0, Math.min(100, value));
+  return (
+    <div style={{ marginBottom: '8px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '3px' }}>
+        <span>{label}</span>
+        <strong style={{ color }}>
+          {value.toFixed(1)}
+          {unit}
+          {value <= critical ? ' - CRÍTICO' : ''}
+        </strong>
+      </div>
+      <div style={{ background: '#1f2937', borderRadius: '4px', height: '6px', overflow: 'hidden' }}>
+        <div style={{ width: `${pct}%`, height: '100%', background: color }} />
+      </div>
+    </div>
+  );
+};
 
 /**
  * Mapa Topográfico 2D con Visión por Computadora Real sobre la Imagen Cargada:
@@ -27,12 +65,17 @@ const GRID_ROWS = 60;
  *   directamente de los píxeles de la imagen que pongas.
  * - El Dron Fijo (Altitud Z) escanea y marca los cráteres/obstáculos reales de la foto dentro de su radio.
  * - El Camino Seguro (A*) rodea los cráteres y pendientes reales de la imagen hasta donde haces clic.
+ * - Ícono de astronauta: abre/cierra el panel flotante de telemetría del traje EVA-01.
+ * - Ícono de ojo: alterna el estilo visual del mapa (satélite vs. topográfico neón).
  */
 export const TopographicMap2D: React.FC<TopographicMap2DProps> = ({
   dataset,
   mode,
   isConnected,
   evaYaw = 0,
+  eva = null,
+  risk,
+  utcTime,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -46,6 +89,9 @@ export const TopographicMap2D: React.FC<TopographicMap2DProps> = ({
   const [showDetectedZones, setShowDetectedZones] = useState<boolean>(true);
   const [routeOrigin, setRouteOrigin] = useState<RouteOrigin>('eva');
   const [targetPoint, setTargetPoint] = useState<[number, number]>([6.4, 6.8]);
+
+  const [mapStyle, setMapStyle] = useState<MapVisualStyle>('satellite');
+  const [showTelemetry, setShowTelemetry] = useState<boolean>(false);
 
   const [hoverInfo, setHoverInfo] = useState<{
     x: number;
@@ -98,6 +144,60 @@ export const TopographicMap2D: React.FC<TopographicMap2DProps> = ({
     return computeSafeRouteFromImageVision(startPoint, targetPoint, visionData, dataset);
   }, [startPoint[0], startPoint[1], targetPoint[0], targetPoint[1], visionData, dataset]);
 
+  // Perfil de elevación real a lo largo del Camino Seguro, muestreado de la matriz de visión
+  const elevationProfile = useMemo(() => {
+    if (!visionData || safeRoute.points.length < 2) return [];
+    const pts = safeRoute.points;
+    const segLens: number[] = [];
+    let total = 0;
+    for (let i = 1; i < pts.length; i++) {
+      const d = Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+      segLens.push(d);
+      total += d;
+    }
+    if (total === 0) return [];
+
+    const SAMPLES = 28;
+    const profile: Array<{ dist: number; elev: number }> = [];
+    for (let s = 0; s <= SAMPLES; s++) {
+      const targetDist = (s / SAMPLES) * total;
+      let acc = 0;
+      let idx = 0;
+      while (idx < segLens.length - 1 && acc + segLens[idx] < targetDist) {
+        acc += segLens[idx];
+        idx++;
+      }
+      const segLen = segLens[idx] || 0.0001;
+      const t = Math.max(0, Math.min(1, (targetDist - acc) / segLen));
+      const p0 = pts[idx];
+      const p1 = pts[idx + 1] ?? pts[idx];
+      const x = p0[0] + (p1[0] - p0[0]) * t;
+      const y = p0[1] + (p1[1] - p0[1]) * t;
+      profile.push({
+        dist: Number((targetDist * 10).toFixed(1)),
+        elev: sampleMatrixAt(x, y, visionData.elevationGrid),
+      });
+    }
+    return profile;
+  }, [visionData, safeRoute]);
+
+  const elevationChart = useMemo(() => {
+    if (elevationProfile.length < 2) return null;
+    const W = 220;
+    const H = 70;
+    const PAD = 4;
+    const maxDist = elevationProfile[elevationProfile.length - 1].dist || 1;
+    const elevs = elevationProfile.map((p) => p.elev);
+    const minE = Math.min(...elevs);
+    const maxE = Math.max(...elevs);
+    const span = Math.max(0.5, maxE - minE);
+    const toX = (d: number) => PAD + (d / maxDist) * (W - PAD * 2);
+    const toY = (e: number) => H - PAD - ((e - minE) / span) * (H - PAD * 2);
+    const linePts = elevationProfile.map((p) => `${toX(p.dist)},${toY(p.elev)}`).join(' ');
+    const areaPts = `${PAD},${H - PAD} ${linePts} ${W - PAD},${H - PAD}`;
+    return { W, H, linePts, areaPts, minE: minE.toFixed(1), maxE: maxE.toFixed(1) };
+  }, [elevationProfile]);
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !visionData) return;
@@ -107,9 +207,12 @@ export const TopographicMap2D: React.FC<TopographicMap2DProps> = ({
     const width = canvas.width;
     const height = canvas.height;
 
-    // 1. Dibujar la IMAGEN ACTIVA de fondo
+    // 1. Fondo: imagen real (modo Satélite) o fondo oscuro estilizado (modo Topográfico Neón)
     ctx.clearRect(0, 0, width, height);
-    if (loadedImgRef.current) {
+    if (mapStyle === 'topo_neon') {
+      ctx.fillStyle = '#05020a';
+      ctx.fillRect(0, 0, width, height);
+    } else if (loadedImgRef.current) {
       ctx.drawImage(loadedImgRef.current, 0, 0, width, height);
       ctx.fillStyle = visionData.isLineMap
         ? 'rgba(15, 23, 42, 0.10)'
@@ -140,13 +243,19 @@ export const TopographicMap2D: React.FC<TopographicMap2DProps> = ({
         const isMajorContour = Math.round(level) % 5 === 0 || levelIdx % 3 === 0;
 
         ctx.beginPath();
-        ctx.strokeStyle = visionData.isLineMap
-          ? isMajorContour
-            ? 'rgba(234, 88, 12, 0.78)'
-            : 'rgba(249, 115, 22, 0.42)'
-          : isMajorContour
-          ? 'rgba(253, 186, 116, 0.78)'
-          : 'rgba(254, 215, 170, 0.40)';
+        if (mapStyle === 'topo_neon') {
+          ctx.strokeStyle = isMajorContour
+            ? 'rgba(244, 63, 177, 0.88)'
+            : 'rgba(244, 63, 177, 0.46)';
+        } else {
+          ctx.strokeStyle = visionData.isLineMap
+            ? isMajorContour
+              ? 'rgba(234, 88, 12, 0.78)'
+              : 'rgba(249, 115, 22, 0.42)'
+            : isMajorContour
+            ? 'rgba(253, 186, 116, 0.78)'
+            : 'rgba(254, 215, 170, 0.40)';
+        }
         ctx.lineWidth = isMajorContour ? 1.5 : 0.85;
 
         let labelPlacedForLevel = false;
@@ -190,7 +299,8 @@ export const TopographicMap2D: React.FC<TopographicMap2DProps> = ({
                 labelPlacedForLevel = true;
                 ctx.save();
                 ctx.font = 'bold 10px monospace';
-                ctx.fillStyle = visionData.isLineMap ? '#9a3412' : '#ffedd5';
+                ctx.fillStyle =
+                  mapStyle === 'topo_neon' ? '#f9a8d4' : visionData.isLineMap ? '#9a3412' : '#ffedd5';
                 ctx.fillText(`${Math.round(level)}m`, p1.x + 2, p1.y - 2);
                 ctx.restore();
               }
@@ -416,6 +526,7 @@ export const TopographicMap2D: React.FC<TopographicMap2DProps> = ({
     targetPoint,
     safeRoute,
     routeOrigin,
+    mapStyle,
   ]);
 
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -449,13 +560,54 @@ export const TopographicMap2D: React.FC<TopographicMap2DProps> = ({
     ).length;
   }, [visionData, dataset.droneScanRadius]);
 
+  // Tarjetas de "Obstáculos & Pendientes" a partir del riesgo real evaluado (EVA + Dron)
+  // y de los cráteres/pendientes reales detectados por visión dentro del radio de escaneo.
+  const riskCards = useMemo(() => {
+    const cards: Array<{ level: 'red' | 'yellow' | 'green'; title: string; text: string }> = [];
+
+    risk.reasons.forEach((reason) => {
+      const level = classifyReason(reason);
+      cards.push({
+        level,
+        title: level === 'red' ? 'Riesgo detectado: ALTO' : 'Riesgo detectado: MEDIO',
+        text: reason,
+      });
+    });
+
+    if (scannedHazardsCount > 0) {
+      cards.push({
+        level: 'green',
+        title: 'Riesgo detectado: BAJO',
+        text: `Zona con ${scannedHazardsCount} cráter(es)/pendiente(s) reales dentro del escaneo del dron`,
+      });
+    }
+
+    if (cards.length === 0) {
+      cards.push({
+        level: 'green',
+        title: 'Todo nominal',
+        text: 'Sin anomalías relevantes detectadas en este momento.',
+      });
+    }
+
+    return cards;
+  }, [risk, scannedHazardsCount]);
+
+  const viewLabel = mapStyle === 'topo_neon' ? 'Vista Topográfica (Escaneo Dron)' : imageLabel;
+
+  const latLon = useMemo(() => {
+    const lat = -11.9 - targetPoint[1] * 0.012;
+    const lon = 6.2 + targetPoint[0] * 0.012;
+    return { lat: lat.toFixed(4), lon: lon.toFixed(4) };
+  }, [targetPoint]);
+
   return (
     <div
       style={{
-        background: '#111827',
-        border: '1px solid #374151',
+        background: '#0b1220',
+        border: '1px solid #1e3a8a',
         borderRadius: '10px',
-        padding: '16px',
+        overflow: 'hidden',
         height: '100%',
         boxSizing: 'border-box',
       }}
@@ -468,194 +620,467 @@ export const TopographicMap2D: React.FC<TopographicMap2DProps> = ({
         style={{ display: 'none' }}
       />
 
-      {/* Cabecera de controles del Mapa y Selector de Imagen */}
+      {/* Cabecera de Misión estilo HUD: nombre de operación + reloj UTC */}
       <div
         style={{
+          background: 'linear-gradient(90deg, #1e3a8a, #0c4a6e)',
+          borderBottom: '2px solid #38bdf8',
+          padding: '10px 16px',
           display: 'flex',
           flexWrap: 'wrap',
           justifyContent: 'space-between',
           alignItems: 'center',
-          gap: '10px',
-          marginBottom: '12px',
+          gap: '8px',
         }}
       >
         <div>
-          <h2 style={{ margin: 0, fontSize: '17px', color: '#f97316' }}>
-            🗺️ Visión Real sobre Imagen + Camino Seguro ({imageLabel})
-          </h2>
-          <p style={{ margin: '4px 0 0 0', fontSize: '12px', color: '#9ca3af' }}>
+          <div style={{ fontSize: '10px', color: '#bae6fd', letterSpacing: '0.5px' }}>
+            MISIÓN: OPERACIONES SUPERFICIE ARES-IV
+          </div>
+          <div style={{ fontSize: '15px', fontWeight: 'bold', color: '#ffffff' }}>
+            🗺️ {viewLabel}
+          </div>
+        </div>
+        {utcTime && (
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ fontSize: '10px', color: '#93c5fd' }}>UTC</div>
+            <div style={{ fontSize: '15px', fontWeight: 'bold', color: '#ffffff', fontFamily: 'monospace' }}>
+              {utcTime}
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div style={{ padding: '16px' }}>
+        {/* Cabecera de controles del Mapa y Selector de Imagen */}
+        <div
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: '10px',
+            marginBottom: '12px',
+          }}
+        >
+          <p style={{ margin: 0, fontSize: '12px', color: '#9ca3af' }}>
             Detecta los <strong>cráteres, sombras y pendientes reales</strong> de los píxeles de la foto ({scannedHazardsCount} zonas escaneadas por el Dron).
           </p>
+
+          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+            <button
+              onClick={() => {
+                if (imageSrc === '/mars-terrain.jpg') {
+                  setImageSrc('/topo-reference.jpg');
+                  setImageLabel('Plano Topográfico Curvas');
+                } else {
+                  setImageSrc('/mars-terrain.jpg');
+                  setImageLabel('Satélite Marte (Cráteres)');
+                }
+              }}
+              style={{
+                background: '#1e3a8a',
+                color: '#bfdbfe',
+                border: '1px solid #3b82f6',
+                borderRadius: '6px',
+                padding: '5px 10px',
+                cursor: 'pointer',
+                fontFamily: 'monospace',
+                fontSize: '12px',
+                fontWeight: 'bold',
+              }}
+            >
+              🔄 Cambiar Imagen ({imageSrc === '/mars-terrain.jpg' ? 'Ver Plano B/N' : 'Ver Marte Satélite'})
+            </button>
+
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              style={{
+                background: '#065f46',
+                color: '#d1fae5',
+                border: '1px solid #10b981',
+                borderRadius: '6px',
+                padding: '5px 10px',
+                cursor: 'pointer',
+                fontFamily: 'monospace',
+                fontSize: '12px',
+                fontWeight: 'bold',
+              }}
+            >
+              📂 Subir Otra Imagen...
+            </button>
+
+            <button
+              onClick={() => setShowDetectedZones(!showDetectedZones)}
+              style={{
+                background: showDetectedZones ? '#7f1d1d' : '#1f2937',
+                color: '#fecaca',
+                border: '1px solid #ef4444',
+                borderRadius: '6px',
+                padding: '5px 10px',
+                cursor: 'pointer',
+                fontFamily: 'monospace',
+                fontSize: '12px',
+              }}
+            >
+              {showDetectedZones ? 'Cráteres Detectados: ON' : 'Cráteres Detectados: OFF'}
+            </button>
+
+            <button
+              onClick={() => setShowContours(!showContours)}
+              style={{
+                background: showContours ? '#7c2d12' : '#1f2937',
+                color: '#fed7aa',
+                border: '1px solid #9a3412',
+                borderRadius: '6px',
+                padding: '5px 10px',
+                cursor: 'pointer',
+                fontFamily: 'monospace',
+                fontSize: '12px',
+              }}
+            >
+              {showContours ? 'Curvas Nivel: ON' : 'Curvas Nivel: OFF'}
+            </button>
+          </div>
         </div>
 
-        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-          <button
-            onClick={() => {
-              if (imageSrc === '/mars-terrain.jpg') {
-                setImageSrc('/topo-reference.jpg');
-                setImageLabel('Plano Topográfico Curvas');
-              } else {
-                setImageSrc('/mars-terrain.jpg');
-                setImageLabel('Satélite Marte (Cráteres)');
-              }
-            }}
-            style={{
-              background: '#1e3a8a',
-              color: '#bfdbfe',
-              border: '1px solid #3b82f6',
-              borderRadius: '6px',
-              padding: '5px 10px',
-              cursor: 'pointer',
-              fontFamily: 'monospace',
-              fontSize: '12px',
-              fontWeight: 'bold',
-            }}
-          >
-            🔄 Cambiar Imagen ({imageSrc === '/mars-terrain.jpg' ? 'Ver Plano B/N' : 'Ver Marte Satélite'})
-          </button>
+        {/* Fila principal: Mapa (izquierda) + Panel de Obstáculos y Elevación (derecha) */}
+        <div style={{ display: 'flex', gap: '14px', alignItems: 'stretch', flexWrap: 'wrap' }}>
+          {/* Lienzo Canvas 2D interactivo */}
+          <div style={{ position: 'relative', flex: '2 1 560px', minWidth: '320px' }}>
+            <canvas
+              ref={canvasRef}
+              width={920}
+              height={440}
+              onClick={handleCanvasClick}
+              onMouseMove={handleMouseMove}
+              onMouseLeave={() => setHoverInfo(null)}
+              style={{
+                width: '100%',
+                height: 'auto',
+                borderRadius: '8px',
+                border: '2px solid #374151',
+                cursor: 'pointer',
+                display: 'block',
+              }}
+            />
 
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            style={{
-              background: '#065f46',
-              color: '#d1fae5',
-              border: '1px solid #10b981',
-              borderRadius: '6px',
-              padding: '5px 10px',
-              cursor: 'pointer',
-              fontFamily: 'monospace',
-              fontSize: '12px',
-              fontWeight: 'bold',
-            }}
-          >
-            📂 Subir Otra Imagen...
-          </button>
+            {/* Barra flotante con métricas del Camino Seguro calculado */}
+            <div
+              style={{
+                position: 'absolute',
+                top: '10px',
+                left: '10px',
+                background: 'rgba(17, 24, 39, 0.92)',
+                border: '1px solid #22c55e',
+                padding: '6px 12px',
+                borderRadius: '6px',
+                fontSize: '12px',
+                color: '#f3f4f6',
+                display: 'flex',
+                gap: '14px',
+                flexWrap: 'wrap',
+                maxWidth: 'calc(100% - 70px)',
+              }}
+            >
+              <span style={{ color: '#4ade80', fontWeight: 'bold' }}>
+                ✅ CAMINO SEGURO TRAZADO
+              </span>
+              <span>
+                Distancia: <strong>{safeRoute.distanceMeters} m</strong>
+              </span>
+              <span>
+                Pendiente Máx: <strong>{safeRoute.maxSlopeDeg}°</strong>
+              </span>
+              <span>
+                Tiempo Est.: <strong>{safeRoute.estimatedSeconds} s</strong>
+              </span>
+            </div>
 
-          <button
-            onClick={() => setShowDetectedZones(!showDetectedZones)}
-            style={{
-              background: showDetectedZones ? '#7f1d1d' : '#1f2937',
-              color: '#fecaca',
-              border: '1px solid #ef4444',
-              borderRadius: '6px',
-              padding: '5px 10px',
-              cursor: 'pointer',
-              fontFamily: 'monospace',
-              fontSize: '12px',
-            }}
-          >
-            {showDetectedZones ? 'Cráteres Detectados: ON' : 'Cráteres Detectados: OFF'}
-          </button>
+            {/* Brújula decorativa (aguja orientada según el yaw real del EVA) */}
+            <div
+              style={{
+                position: 'absolute',
+                top: '10px',
+                right: '10px',
+                width: '46px',
+                height: '46px',
+                borderRadius: '50%',
+                background: 'rgba(17, 24, 39, 0.85)',
+                border: '1px solid #38bdf8',
+                zIndex: 4,
+              }}
+            >
+              <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+                <span style={{ position: 'absolute', top: '2px', left: '50%', transform: 'translateX(-50%)', fontSize: '9px', color: '#93c5fd', fontWeight: 'bold' }}>N</span>
+                <span style={{ position: 'absolute', bottom: '1px', left: '50%', transform: 'translateX(-50%)', fontSize: '8px', color: '#64748b' }}>S</span>
+                <span style={{ position: 'absolute', left: '2px', top: '50%', transform: 'translateY(-50%)', fontSize: '8px', color: '#64748b' }}>O</span>
+                <span style={{ position: 'absolute', right: '2px', top: '50%', transform: 'translateY(-50%)', fontSize: '8px', color: '#64748b' }}>E</span>
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: '50%',
+                    left: '50%',
+                    width: '2px',
+                    height: '15px',
+                    background: '#f97316',
+                    transform: `translate(-50%, -100%) rotate(${evaYaw}deg)`,
+                    transformOrigin: 'bottom center',
+                  }}
+                />
+              </div>
+            </div>
 
-          <button
-            onClick={() => setShowContours(!showContours)}
-            style={{
-              background: showContours ? '#7c2d12' : '#1f2937',
-              color: '#fed7aa',
-              border: '1px solid #9a3412',
-              borderRadius: '6px',
-              padding: '5px 10px',
-              cursor: 'pointer',
-              fontFamily: 'monospace',
-              fontSize: '12px',
-            }}
-          >
-            {showContours ? 'Curvas Nivel: ON' : 'Curvas Nivel: OFF'}
-          </button>
+            {/* Inspector de coordenadas al pasar el mouse (centrado, abajo) */}
+            <div
+              style={{
+                position: 'absolute',
+                bottom: '10px',
+                left: '50%',
+                transform: 'translateX(-50%)',
+                background: 'rgba(17, 24, 39, 0.90)',
+                border: '1px solid #374151',
+                padding: '5px 10px',
+                borderRadius: '6px',
+                fontSize: '11px',
+                color: '#e5e7eb',
+                maxWidth: 'calc(100% - 110px)',
+                textAlign: 'center',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              {hoverInfo ? (
+                <span>
+                  Click para ir a: <strong>X={hoverInfo.x}m, Y={hoverInfo.y}m</strong> • Elevación real píxel:{' '}
+                  <strong style={{ color: '#fb923c' }}>{hoverInfo.z}m</strong> • Pendiente real:{' '}
+                  <strong>{hoverInfo.slope}°</strong>
+                </span>
+              ) : (
+                <span>Haz clic en cualquier punto de la imagen para trazar el Camino Seguro</span>
+              )}
+            </div>
+
+            {/* Escala + Lat/Lon simulada, arriba del ícono del ojo */}
+            <div
+              style={{
+                position: 'absolute',
+                right: '54px',
+                bottom: '10px',
+                textAlign: 'right',
+                fontSize: '9px',
+                color: '#9ca3af',
+                background: 'rgba(17, 24, 39, 0.75)',
+                padding: '4px 8px',
+                borderRadius: '6px',
+                border: '1px solid #374151',
+                zIndex: 4,
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'flex-end' }}>
+                <span style={{ width: '22px', height: '2px', background: '#e5e7eb', display: 'inline-block' }} />
+                {dataset.widthMeters} m
+              </div>
+              <div>Lat {latLon.lat}° Lon {latLon.lon}°</div>
+            </div>
+
+            {/* Ícono Astronauta: abre/cierra la telemetría del traje EVA-01 */}
+            <button
+              onClick={() => setShowTelemetry(!showTelemetry)}
+              title="Telemetría del traje EVA-01"
+              style={{
+                position: 'absolute',
+                left: '10px',
+                bottom: '10px',
+                width: '38px',
+                height: '38px',
+                borderRadius: '50%',
+                background: showTelemetry ? '#38bdf8' : '#ffffff',
+                border: '2px solid #0c4a6e',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '18px',
+                boxShadow: '0 2px 6px rgba(0,0,0,0.5)',
+                zIndex: 5,
+                padding: 0,
+              }}
+            >
+              🧑‍🚀
+            </button>
+
+            {/* Ícono Ojo: alterna el estilo visual del mapa (Satélite ↔ Topográfico Neón) */}
+            <button
+              onClick={() => setMapStyle(mapStyle === 'satellite' ? 'topo_neon' : 'satellite')}
+              title="Cambiar vista del mapa"
+              style={{
+                position: 'absolute',
+                right: '10px',
+                bottom: '10px',
+                width: '38px',
+                height: '38px',
+                borderRadius: '50%',
+                background: '#ffffff',
+                border: '2px solid #0c4a6e',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '18px',
+                boxShadow: '0 2px 6px rgba(0,0,0,0.5)',
+                zIndex: 5,
+                padding: 0,
+              }}
+            >
+              👁️
+            </button>
+
+            {/* Panel flotante de Telemetría del traje EVA-01 */}
+            {showTelemetry && (
+              <div
+                style={{
+                  position: 'absolute',
+                  left: '10px',
+                  bottom: '56px',
+                  width: '230px',
+                  background: 'rgba(6, 20, 15, 0.96)',
+                  border: '1px solid #22c55e',
+                  borderRadius: '8px',
+                  padding: '10px 12px',
+                  fontSize: '11px',
+                  color: '#e5e7eb',
+                  zIndex: 6,
+                  boxShadow: '0 4px 14px rgba(0,0,0,0.6)',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                  <strong style={{ color: '#4ade80' }}>Telemetría del traje EVA-01</strong>
+                  <span style={{ fontSize: '12px' }}>
+                    📶 {isConnected ? '🟢' : '⚪'} 🔋
+                  </span>
+                </div>
+                {eva ? (
+                  <>
+                    <TelemetryBar
+                      label="O2 en depósito"
+                      value={eva.suit_o2}
+                      unit="%"
+                      critical={THRESHOLDS.O2.CRITICAL}
+                      warning={THRESHOLDS.O2.WARNING}
+                    />
+                    <div style={{ marginBottom: '8px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '3px' }}>
+                        <span>Pulso cardiaco</span>
+                        <strong style={{ color: '#f87171' }}>{eva.heart_rate} BPM</strong>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'flex-end', gap: '2px', height: '14px' }}>
+                        {Array.from({ length: 14 }).map((_, i) => {
+                          const h = 4 + Math.abs(Math.sin(i * 0.9 + eva.heart_rate)) * 10;
+                          return (
+                            <div
+                              key={i}
+                              style={{ width: '3px', height: `${h}px`, background: '#f87171', borderRadius: '1px' }}
+                            />
+                          );
+                        })}
+                      </div>
+                    </div>
+                    <TelemetryBar
+                      label="Batería"
+                      value={eva.battery}
+                      unit="%"
+                      critical={THRESHOLDS.BATTERY.CRITICAL}
+                      warning={THRESHOLDS.BATTERY.WARNING}
+                    />
+                  </>
+                ) : (
+                  <p style={{ color: '#6b7280', margin: 0 }}>Esperando telemetría de ESP32 #3...</p>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Panel lateral: Obstáculos & Pendientes + Elevación */}
+          <div style={{ flex: '1 1 230px', minWidth: '220px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            <div style={{ background: '#111827', border: '1px solid #374151', borderRadius: '8px', overflow: 'hidden' }}>
+              <div
+                style={{
+                  background: '#facc15',
+                  color: '#1f2937',
+                  fontWeight: 'bold',
+                  fontSize: '12px',
+                  padding: '6px 10px',
+                }}
+              >
+                ⚠️ Obstáculos &amp; Pendientes
+              </div>
+              <div style={{ padding: '8px', display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '220px', overflowY: 'auto' }}>
+                {riskCards.map((c, i) => (
+                  <div
+                    key={i}
+                    style={{
+                      background: c.level === 'red' ? '#7f1d1d' : c.level === 'yellow' ? '#78350f' : '#14532d',
+                      border: `1px solid ${c.level === 'red' ? '#ef4444' : c.level === 'yellow' ? '#f59e0b' : '#22c55e'}`,
+                      borderRadius: '6px',
+                      padding: '8px 10px',
+                      fontSize: '11px',
+                    }}
+                  >
+                    <div style={{ fontWeight: 'bold', marginBottom: '3px' }}>
+                      {c.level === 'red' ? '🔴' : c.level === 'yellow' ? '🟡' : '🟢'} {c.title}
+                    </div>
+                    <div style={{ color: '#e5e7eb' }}>{c.text}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ background: '#111827', border: '1px solid #374151', borderRadius: '8px', padding: '10px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontSize: '12px', marginBottom: '6px' }}>
+                <strong style={{ color: '#38bdf8' }}>📈 Elevación</strong>
+                <span style={{ color: '#9ca3af', fontSize: '11px' }}>
+                  Pendiente máx: <strong style={{ color: '#fb923c' }}>{safeRoute.maxSlopeDeg}°</strong>
+                </span>
+              </div>
+              {elevationChart ? (
+                <>
+                  <svg viewBox={`0 0 ${elevationChart.W} ${elevationChart.H}`} style={{ width: '100%', height: '70px', display: 'block' }}>
+                    <polygon points={elevationChart.areaPts} fill="rgba(56,189,248,0.18)" />
+                    <polyline points={elevationChart.linePts} fill="none" stroke="#38bdf8" strokeWidth={1.6} />
+                  </svg>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: '#6b7280', marginTop: '2px' }}>
+                    <span>{elevationChart.minE}m</span>
+                    <span>Distancia: {safeRoute.distanceMeters}m</span>
+                    <span>{elevationChart.maxE}m</span>
+                  </div>
+                </>
+              ) : (
+                <p style={{ fontSize: '11px', color: '#6b7280', margin: 0 }}>
+                  Traza una ruta (clic en el mapa) para ver el perfil de elevación.
+                </p>
+              )}
+            </div>
+          </div>
         </div>
-      </div>
 
-      {/* Lienzo Canvas 2D interactivo */}
-      <div style={{ position: 'relative' }}>
-        <canvas
-          ref={canvasRef}
-          width={920}
-          height={440}
-          onClick={handleCanvasClick}
-          onMouseMove={handleMouseMove}
-          onMouseLeave={() => setHoverInfo(null)}
-          style={{
-            width: '100%',
-            height: 'auto',
-            borderRadius: '8px',
-            border: '2px solid #374151',
-            cursor: 'pointer',
-            display: 'block',
-          }}
-        />
-
-        {/* Barra flotante con métricas del Camino Seguro calculado */}
+        {/* Leyenda inferior */}
         <div
           style={{
-            position: 'absolute',
-            top: '10px',
-            left: '10px',
-            background: 'rgba(17, 24, 39, 0.92)',
-            border: '1px solid #22c55e',
-            padding: '6px 12px',
-            borderRadius: '6px',
-            fontSize: '12px',
-            color: '#f3f4f6',
             display: 'flex',
-            gap: '14px',
             flexWrap: 'wrap',
+            gap: '14px',
+            marginTop: '10px',
+            fontSize: '12px',
+            color: '#9ca3af',
           }}
         >
-          <span style={{ color: '#4ade80', fontWeight: 'bold' }}>
-            ✅ CAMINO SEGURO TRAZADO
-          </span>
-          <span>
-            Distancia: <strong>{safeRoute.distanceMeters} m</strong>
-          </span>
-          <span>
-            Pendiente Máx: <strong>{safeRoute.maxSlopeDeg}°</strong>
-          </span>
-          <span>
-            Tiempo Est.: <strong>{safeRoute.estimatedSeconds} s</strong>
-          </span>
+          <span style={{ color: '#4ade80', fontWeight: 'bold' }}>━━ Camino Seguro (Evita cráteres reales de la foto)</span>
+          <span style={{ color: '#f87171' }}>◌ Cráteres / Barrancos Reales Detectados en la Imagen</span>
+          <span style={{ color: '#c084fc' }}>◌ Cono de Escaneo Dron Fijo (Altitud Z)</span>
+          <span style={{ color: '#38bdf8' }}>● EVA (Alan)</span>
         </div>
-
-        {/* Inspector de coordenadas al pasar el mouse */}
-        <div
-          style={{
-            position: 'absolute',
-            bottom: '10px',
-            left: '10px',
-            background: 'rgba(17, 24, 39, 0.90)',
-            border: '1px solid #374151',
-            padding: '5px 10px',
-            borderRadius: '6px',
-            fontSize: '11px',
-            color: '#e5e7eb',
-          }}
-        >
-          {hoverInfo ? (
-            <span>
-              Click para ir a: <strong>X={hoverInfo.x}m, Y={hoverInfo.y}m</strong> • Elevación real píxel:{' '}
-              <strong style={{ color: '#fb923c' }}>{hoverInfo.z}m</strong> • Pendiente real:{' '}
-              <strong>{hoverInfo.slope}°</strong>
-            </span>
-          ) : (
-            <span>Haz clic en cualquier punto de la imagen para trazar el Camino Seguro evitando cráteres reales</span>
-          )}
-        </div>
-      </div>
-
-      {/* Leyenda inferior */}
-      <div
-        style={{
-          display: 'flex',
-          flexWrap: 'wrap',
-          gap: '14px',
-          marginTop: '10px',
-          fontSize: '12px',
-          color: '#9ca3af',
-        }}
-      >
-        <span style={{ color: '#4ade80', fontWeight: 'bold' }}>━━ Camino Seguro (Evita cráteres reales de la foto)</span>
-        <span style={{ color: '#f87171' }}>◌ Cráteres / Barrancos Reales Detectados en la Imagen</span>
-        <span style={{ color: '#c084fc' }}>◌ Cono de Escaneo Dron Fijo (Altitud Z)</span>
-        <span style={{ color: '#38bdf8' }}>● EVA (Alan)</span>
       </div>
     </div>
   );
