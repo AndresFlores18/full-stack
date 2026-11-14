@@ -1,4 +1,5 @@
 import React from 'react';
+import { Radio, RefreshCw, Satellite, Server } from 'lucide-react';
 import { fetchMapStateFromServer } from '@martian/shared';
 import { CONNECTION_MODES, OperationMode } from '../config/connectionConfig';
 
@@ -43,8 +44,9 @@ export const MissionHeader: React.FC<MissionHeaderProps> = ({
         <div style={{ fontSize: '10px', color: '#bae6fd', letterSpacing: '0.5px' }}>
           MISIÓN: OPERACIONES SUPERFICIE ARES-IV
         </div>
-        <h1 style={{ margin: '2px 0 0 0', color: '#ffffff', fontSize: '22px' }}>
-          🔴 NASA Space Apps: Martian Map - Mission Control
+        <h1 style={{ margin: '2px 0 0 0', color: '#ffffff', fontSize: '22px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <Satellite size={22} color="#f97316" />
+          NASA Space Apps: Martian Map - Mission Control
         </h1>
         <p style={{ margin: '6px 0 0 0', color: '#bae6fd', fontSize: '13px' }}>
           Dashboard Web (Andrés) • Enlace ({activeModeConfig.shortName}):{' '}
@@ -69,7 +71,10 @@ export const MissionHeader: React.FC<MissionHeaderProps> = ({
           border: '1px solid #1e3a8a',
           borderRadius: '8px',
           padding: '10px 12px',
-          minWidth: '340px',
+          flex: '1 1 300px',
+          minWidth: '260px',
+          maxWidth: '100%',
+          boxSizing: 'border-box',
         }}
       >
         <div style={{ fontSize: '11px', color: '#9ca3af', marginBottom: '6px' }}>
@@ -80,6 +85,10 @@ export const MissionHeader: React.FC<MissionHeaderProps> = ({
             onClick={() => onSwitchMode('local_esp')}
             style={{
               flex: 1,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '6px',
               padding: '6px 10px',
               borderRadius: '6px',
               border: mode === 'local_esp' ? '2px solid #38bdf8' : '1px solid #374151',
@@ -91,12 +100,16 @@ export const MissionHeader: React.FC<MissionHeaderProps> = ({
               fontSize: '12px',
             }}
           >
-            📡 LOCAL (ESP32)
+            <Radio size={14} /> LOCAL (ESP32)
           </button>
           <button
             onClick={() => onSwitchMode('online_raspi')}
             style={{
               flex: 1,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '6px',
               padding: '6px 10px',
               borderRadius: '6px',
               border: mode === 'online_raspi' ? '2px solid #a855f7' : '1px solid #374151',
@@ -108,18 +121,19 @@ export const MissionHeader: React.FC<MissionHeaderProps> = ({
               fontSize: '12px',
             }}
           >
-            🍓 EN LÍNEA (RASPBERRY)
+            <Server size={14} /> EN LÍNEA (RASPBERRY)
           </button>
         </div>
 
-        <div style={{ display: 'flex', gap: '6px' }}>
+        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
           <input
             type="text"
             placeholder="Ej: 192.168.1.100:8765 o ws://..."
             value={customUrls[mode]}
             onChange={(e) => onChangeUrl(e.target.value)}
             style={{
-              flex: 1,
+              flex: '1 1 140px',
+              minWidth: 0,
               background: '#030712',
               border: '1px solid #374151',
               borderRadius: '4px',
@@ -127,6 +141,7 @@ export const MissionHeader: React.FC<MissionHeaderProps> = ({
               padding: '4px 8px',
               fontFamily: 'monospace',
               fontSize: '12px',
+              boxSizing: 'border-box',
             }}
           />
           <button
@@ -149,6 +164,9 @@ export const MissionHeader: React.FC<MissionHeaderProps> = ({
             onClick={() => fetchMapStateFromServer(customUrls[mode])}
             title="Descargar occupancy_grid (120x80) y payload desde el servidor HTTP/WS de esa IP"
             style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
               background: '#1e3a8a',
               color: '#bfdbfe',
               border: '1px solid #3b82f6',
@@ -159,7 +177,7 @@ export const MissionHeader: React.FC<MissionHeaderProps> = ({
               fontSize: '11px',
             }}
           >
-            🔄 Sync Mapa
+            <RefreshCw size={13} /> Sync Mapa
           </button>
         </div>
       </div>

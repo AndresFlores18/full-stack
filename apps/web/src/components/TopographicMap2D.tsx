@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { DroneData, EvaData, RealMapStatePayload, RiskAssessment, THRESHOLDS } from '@martian/shared';
+import { AlertTriangle, CheckCircle2, Eye, HeartPulse, TrendingUp, Upload } from 'lucide-react';
+import { DroneData, EvaData, RealMapStatePayload, RiskAssessment } from '@martian/shared';
 import {
   analyzeImageTerrainReal,
   computeSafeRouteFromImageVision,
@@ -15,26 +16,16 @@ import { MapLayerMode, renderTopographicMapCanvas } from './map/mapCanvasRendere
 interface TopographicMap2DProps {
   dataset: MartianTerrainDataset;
   droneData?: DroneData | null;
-  serverUrl?: string;
   mode: OperationMode;
-  isConnected: boolean;
   evaYaw?: number;
   eva?: EvaData | null;
   risk: RiskAssessment;
-  utcTime?: string;
 }
 
 type RouteOrigin = 'eva' | 'base';
 
 const GRID_COLS = 96;
 const GRID_ROWS = 60;
-
-const MAP_LAYER_ORDER: MapLayerMode[] = [
-  'fusion_mars_d415',
-  'pure_d415_grid',
-  'live_server_cam',
-  'topo_lines',
-];
 
 // Las razones "fuertes" del evaluador de riesgo van siempre en MAYÚSCULAS (CRÍTICO/BLOQUEADA/EXTREMA);
 // las de advertencia van en minúsculas. Reutilizamos esa convención para colorear cada tarjeta.
@@ -43,29 +34,113 @@ function classifyReason(reason: string): 'red' | 'yellow' {
   return RED_MARKERS.test(reason) ? 'red' : 'yellow';
 }
 
+// Semáforo único para cualquier barra de porcentaje del panel: verde (>=65%), amarillo (45-64%), rojo (<45%).
+function pctColor(value: number): string {
+  return value >= 65 ? '#22c55e' : value >= 45 ? '#f59e0b' : '#ef4444';
+}
+
 const TelemetryBar: React.FC<{
   label: string;
   value: number;
   unit: string;
-  critical: number;
-  warning: number;
-}> = ({ label, value, unit, critical, warning }) => {
-  const color = value <= critical ? '#ef4444' : value <= warning ? '#f59e0b' : '#22c55e';
+}> = ({ label, value, unit }) => {
+  const color = pctColor(value);
   const pct = Math.max(0, Math.min(100, value));
   return (
-    <div style={{ marginBottom: '8px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '3px' }}>
+    <div style={{ marginBottom: '10px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
         <span>{label}</span>
         <strong style={{ color }}>
           {value.toFixed(1)}
           {unit}
-          {value <= critical ? ' - CRÍTICO' : ''}
+          {value < 45 ? ' - CRÍTICO' : ''}
         </strong>
       </div>
-      <div style={{ background: '#1f2937', borderRadius: '4px', height: '6px', overflow: 'hidden' }}>
-        <div style={{ width: `${pct}%`, height: '100%', background: color }} />
+      <div style={{ background: 'rgba(255,255,255,0.08)', borderRadius: '999px', height: '8px', overflow: 'hidden' }}>
+        <div style={{ width: `${pct}%`, height: '100%', borderRadius: '999px', background: color }} />
       </div>
     </div>
+  );
+};
+
+const ECG_POINTS =
+  '0,12 20,12 26,3 32,21 38,12 70,12 90,12 96,3 102,21 108,12 140,12 160,12 166,3 172,21 178,12 200,12';
+
+const SEVERITY_COLOR: Record<'red' | 'yellow' | 'green', string> = {
+  red: '#ef4444',
+  yellow: '#f59e0b',
+  green: '#22c55e',
+};
+
+const StatusDot: React.FC<{ level: 'red' | 'yellow' | 'green' }> = ({ level }) => {
+  const color = SEVERITY_COLOR[level];
+  return (
+    <span
+      style={{
+        position: 'relative',
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: '13px',
+        height: '13px',
+        flexShrink: 0,
+      }}
+    >
+      {level === 'red' && (
+        <span
+          style={{
+            position: 'absolute',
+            width: '100%',
+            height: '100%',
+            borderRadius: '50%',
+            background: color,
+            animation: 'statusDotPulse 1.6s ease-out infinite',
+          }}
+        />
+      )}
+      <span
+        style={{
+          position: 'relative',
+          width: '9px',
+          height: '9px',
+          borderRadius: '50%',
+          background: `radial-gradient(circle at 35% 30%, #ffffff80, ${color} 70%)`,
+          boxShadow: `0 0 6px ${color}, 0 0 2px ${color}`,
+          border: '1px solid rgba(255,255,255,0.3)',
+        }}
+      />
+    </span>
+  );
+};
+
+const EcgLine: React.FC<{ color?: string }> = ({ color = '#f87171' }) => (
+  <div style={{ width: '100%', height: '20px', overflow: 'hidden' }}>
+    <style>{`
+      @keyframes ecgScroll {
+        from { transform: translateX(0); }
+        to { transform: translateX(-50%); }
+      }
+    `}</style>
+    <div style={{ display: 'flex', width: '200%', animation: 'ecgScroll 1.4s linear infinite' }}>
+      <svg viewBox="0 0 200 24" preserveAspectRatio="none" style={{ width: '50%', height: '20px', display: 'block', flexShrink: 0 }}>
+        <polyline points={ECG_POINTS} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+      </svg>
+      <svg viewBox="0 0 200 24" preserveAspectRatio="none" style={{ width: '50%', height: '20px', display: 'block', flexShrink: 0 }}>
+        <polyline points={ECG_POINTS} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+      </svg>
+    </div>
+  </div>
+);
+
+const BatteryIcon: React.FC<{ level: number }> = ({ level }) => {
+  const color = pctColor(level);
+  const pct = Math.max(0, Math.min(100, level));
+  return (
+    <svg viewBox="0 0 24 14" width="18" height="11">
+      <rect x="1" y="1" width="19" height="12" rx="2" fill="none" stroke="#9ca3af" strokeWidth="1.4" />
+      <rect x="21.5" y="4.5" width="2" height="5" rx="1" fill="#9ca3af" />
+      <rect x="3" y="3" width={Math.max(1, (pct / 100) * 15)} height="8" rx="1" fill={color} />
+    </svg>
   );
 };
 
@@ -80,12 +155,9 @@ const TelemetryBar: React.FC<{
 export const TopographicMap2D: React.FC<TopographicMap2DProps> = ({
   dataset,
   droneData,
-  serverUrl = 'ws://localhost:8765',
-  isConnected,
   evaYaw = 0,
   eva = null,
   risk,
-  utcTime,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -93,17 +165,16 @@ export const TopographicMap2D: React.FC<TopographicMap2DProps> = ({
 
   const [mapLayerMode, setMapLayerMode] = useState<MapLayerMode>('fusion_mars_d415');
   const [imageSrc, setImageSrc] = useState<string>('/mars-terrain.jpg');
-  const [imageLabel, setImageLabel] = useState<string>(
-    'Fusión Marte + Telemetría D415 (Servidor/data)'
-  );
 
   const [baseVisionData, setBaseVisionData] = useState<ImageVisionAnalysis | null>(null);
   const [localMapState, setLocalMapState] = useState<RealMapStatePayload | null>(null);
 
-  const [showContours, setShowContours] = useState<boolean>(true);
+  // Las curvas de nivel calculadas ahora las controla el ojo: se activan solo en la vista
+  // topográfica (que ya trae sus propias líneas impresas) y quedan apagadas en la vista normal.
+  const showContours = mapLayerMode === 'topo_lines';
   const [showDetectedZones] = useState<boolean>(true);
-  const [showD415GridOverlay, setShowD415GridOverlay] = useState<boolean>(true);
-  const [showServerPaths, setShowServerPaths] = useState<boolean>(true);
+  const showD415GridOverlay = false;
+  const showServerPaths = false;
   const [routeOrigin] = useState<RouteOrigin>('eva');
   const [targetPoint, setTargetPoint] = useState<[number, number]>([7.8, 3.2]);
 
@@ -114,7 +185,7 @@ export const TopographicMap2D: React.FC<TopographicMap2DProps> = ({
     y: number;
     z: number;
     slope: number;
-    d415Cell?: string;
+    d415Cell?: { label: string; color: string };
   } | null>(null);
 
   useEffect(() => {
@@ -129,19 +200,6 @@ export const TopographicMap2D: React.FC<TopographicMap2DProps> = ({
   }, []);
 
   const activeMapState: RealMapStatePayload | null = droneData?.map_state ?? localMapState;
-
-  useEffect(() => {
-    if (mapLayerMode === 'live_server_cam' && droneData?.images?.rgb) {
-      setImageSrc(droneData.images.rgb);
-      setImageLabel('Stream RGB RealSense D415 (Servidor IP)');
-    } else if (mapLayerMode === 'topo_lines') {
-      setImageSrc('/topo-reference.jpg');
-      setImageLabel('Plano Topográfico Curvas + Datos D415');
-    } else if (mapLayerMode === 'fusion_mars_d415' && imageSrc.startsWith('data:image')) {
-      setImageSrc('/mars-terrain.jpg');
-      setImageLabel('Fusión Marte + Telemetría D415');
-    }
-  }, [mapLayerMode, droneData?.images?.rgb]);
 
   useEffect(() => {
     const img = new Image();
@@ -172,7 +230,6 @@ export const TopographicMap2D: React.FC<TopographicMap2DProps> = ({
     if (!file) return;
     const objectUrl = URL.createObjectURL(file);
     setImageSrc(objectUrl);
-    setImageLabel(`Imagen Real: ${file.name}`);
   };
 
   const basePos: [number, number] = [1.1, 5.8];
@@ -317,7 +374,7 @@ export const TopographicMap2D: React.FC<TopographicMap2DProps> = ({
     const zm = Number(sampleMatrixAt(xm, ym, visionData.elevationGrid).toFixed(1));
     const slope = Number(sampleMatrixAt(xm, ym, visionData.slopeGrid).toFixed(1));
 
-    let d415Cell: string | undefined;
+    let d415Cell: { label: string; color: string } | undefined;
     if (activeMapState?.occupancy_grid) {
       const y_m = (xm - 1.5) / 1.45;
       const x_m = (ym - 5.4) / 1.45;
@@ -325,17 +382,16 @@ export const TopographicMap2D: React.FC<TopographicMap2DProps> = ({
       const c = Math.round((x_m + 2.0) / 0.05);
       if (r >= 0 && r < activeMapState.grid_rows && c >= 0 && c < activeMapState.grid_cols) {
         const val = activeMapState.occupancy_grid[r]?.[c];
-        if (val === 2) d415Cell = '🟠 BOULDER (Roca D415)';
-        else if (val === 3) d415Cell = '🔵 CREVICE (Grieta D415)';
-        else if (val === 1) d415Cell = '🟤 INFLATED (Margen D415)';
-        else if (val === 0) d415Cell = '🟢 FREE (Explorado D415)';
+        if (val === 2) d415Cell = { label: 'BOULDER (Roca D415)', color: '#fb923c' };
+        else if (val === 3) d415Cell = { label: 'CREVICE (Grieta D415)', color: '#38bdf8' };
+        else if (val === 1) d415Cell = { label: 'INFLATED (Margen D415)', color: '#a8745c' };
+        else if (val === 0) d415Cell = { label: 'FREE (Explorado D415)', color: '#4ade80' };
       }
     }
 
     setHoverInfo({ x: xm, y: ym, z: zm, slope, d415Cell });
   };
 
-  const d415ObstacleCount = droneData?.obstacles?.length ?? 0;
   const scannedHazardsCount = useMemo(() => {
     if (!visionData) return 0;
     return visionData.detectedObstacles.filter(
@@ -377,8 +433,7 @@ export const TopographicMap2D: React.FC<TopographicMap2DProps> = ({
   }, [risk, scannedHazardsCount]);
 
   const cycleMapLayerMode = () => {
-    const idx = MAP_LAYER_ORDER.indexOf(mapLayerMode);
-    setMapLayerMode(MAP_LAYER_ORDER[(idx + 1) % MAP_LAYER_ORDER.length]);
+    setMapLayerMode(mapLayerMode === 'topo_lines' ? 'fusion_mars_d415' : 'topo_lines');
   };
 
   return (
@@ -400,128 +455,23 @@ export const TopographicMap2D: React.FC<TopographicMap2DProps> = ({
         style={{ display: 'none' }}
       />
 
-      {/* Cabecera de Misión estilo HUD: nombre de operación + reloj UTC */}
-      <div
-        style={{
-          background: 'linear-gradient(90deg, #1e3a8a, #0c4a6e)',
-          borderBottom: '2px solid #38bdf8',
-          padding: '10px 16px',
-          display: 'flex',
-          flexWrap: 'wrap',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          gap: '8px',
-        }}
-      >
-        <div>
-          <div style={{ fontSize: '10px', color: '#bae6fd', letterSpacing: '0.5px' }}>
-            MISIÓN: OPERACIONES SUPERFICIE ARES-IV
-          </div>
-          <div style={{ fontSize: '15px', fontWeight: 'bold', color: '#ffffff' }}>
-            🗺️ {imageLabel}
-          </div>
-        </div>
-        {utcTime && (
-          <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: '10px', color: '#93c5fd' }}>UTC</div>
-            <div style={{ fontSize: '15px', fontWeight: 'bold', color: '#ffffff', fontFamily: 'monospace' }}>
-              {utcTime}
-            </div>
-          </div>
-        )}
-      </div>
-
       <div style={{ padding: '16px' }}>
         <div
           style={{
             display: 'flex',
             flexWrap: 'wrap',
-            justifyContent: 'space-between',
             alignItems: 'center',
             gap: '10px',
             marginBottom: '12px',
           }}
         >
-          <p style={{ margin: 0, fontSize: '12px', color: '#9ca3af' }}>
-            Fusión activa:{' '}
-            <strong>
-              Grid Ocupación 120×80 (`latest_map_state.npz`) + {d415ObstacleCount} Obstáculos D415
-              (`BOULDER`/`CREVICE`) + {scannedHazardsCount} Zonas Escaneadas
-            </strong>{' '}
-            • Servidor: <code>{serverUrl}</code>
-          </p>
-
           <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-            <button
-              onClick={() => setMapLayerMode('fusion_mars_d415')}
-              style={{
-                background: mapLayerMode === 'fusion_mars_d415' ? '#ea580c' : '#1f2937',
-                color: '#fff',
-                border: '1px solid #f97316',
-                borderRadius: '6px',
-                padding: '5px 10px',
-                cursor: 'pointer',
-                fontFamily: 'monospace',
-                fontSize: '11px',
-                fontWeight: 'bold',
-              }}
-            >
-              🌐 Fusión Marte + D415
-            </button>
-
-            <button
-              onClick={() => setMapLayerMode('pure_d415_grid')}
-              style={{
-                background: mapLayerMode === 'pure_d415_grid' ? '#0284c7' : '#1f2937',
-                color: '#e0f2fe',
-                border: '1px solid #38bdf8',
-                borderRadius: '6px',
-                padding: '5px 10px',
-                cursor: 'pointer',
-                fontFamily: 'monospace',
-                fontSize: '11px',
-                fontWeight: 'bold',
-              }}
-            >
-              📡 Grid Ocupación 120×80 (Puro D415)
-            </button>
-
-            <button
-              onClick={() => setMapLayerMode('live_server_cam')}
-              style={{
-                background: mapLayerMode === 'live_server_cam' ? '#7c3aed' : '#1f2937',
-                color: '#ede9fe',
-                border: '1px solid #a855f7',
-                borderRadius: '6px',
-                padding: '5px 10px',
-                cursor: 'pointer',
-                fontFamily: 'monospace',
-                fontSize: '11px',
-                fontWeight: 'bold',
-              }}
-            >
-              📷 Cámara Servidor en Mapa
-            </button>
-
-            <button
-              onClick={() => setMapLayerMode('topo_lines')}
-              style={{
-                background: mapLayerMode === 'topo_lines' ? '#1e3a8a' : '#1f2937',
-                color: '#bfdbfe',
-                border: '1px solid #3b82f6',
-                borderRadius: '6px',
-                padding: '5px 10px',
-                cursor: 'pointer',
-                fontFamily: 'monospace',
-                fontSize: '11px',
-              }}
-            >
-              🗺️ Plano B/N + D415
-            </button>
-
             <button
               onClick={() => fileInputRef.current?.click()}
               style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
                 background: '#065f46',
                 color: '#d1fae5',
                 border: '1px solid #10b981',
@@ -532,55 +482,7 @@ export const TopographicMap2D: React.FC<TopographicMap2DProps> = ({
                 fontSize: '11px',
               }}
             >
-              📂 Subir Imagen...
-            </button>
-
-            <button
-              onClick={() => setShowD415GridOverlay(!showD415GridOverlay)}
-              style={{
-                background: showD415GridOverlay ? '#0e7490' : '#1f2937',
-                color: '#cffafe',
-                border: '1px solid #06b6d4',
-                borderRadius: '6px',
-                padding: '5px 10px',
-                cursor: 'pointer',
-                fontFamily: 'monospace',
-                fontSize: '11px',
-              }}
-            >
-              {showD415GridOverlay ? 'Grid D415: ON' : 'Grid D415: OFF'}
-            </button>
-
-            <button
-              onClick={() => setShowServerPaths(!showServerPaths)}
-              style={{
-                background: showServerPaths ? '#3f6212' : '#1f2937',
-                color: '#ecfccb',
-                border: '1px solid #84cc16',
-                borderRadius: '6px',
-                padding: '5px 10px',
-                cursor: 'pointer',
-                fontFamily: 'monospace',
-                fontSize: '11px',
-              }}
-            >
-              {showServerPaths ? 'Rutas Servidor (A*/Dijkstra): ON' : 'Rutas Servidor: OFF'}
-            </button>
-
-            <button
-              onClick={() => setShowContours(!showContours)}
-              style={{
-                background: showContours ? '#7c2d12' : '#1f2937',
-                color: '#fed7aa',
-                border: '1px solid #9a3412',
-                borderRadius: '6px',
-                padding: '5px 10px',
-                cursor: 'pointer',
-                fontFamily: 'monospace',
-                fontSize: '11px',
-              }}
-            >
-              {showContours ? 'Curvas: ON' : 'Curvas: OFF'}
+              <Upload size={13} /> Subir Imagen...
             </button>
           </div>
         </div>
@@ -622,8 +524,8 @@ export const TopographicMap2D: React.FC<TopographicMap2DProps> = ({
                 maxWidth: 'calc(100% - 20px)',
               }}
             >
-              <span style={{ color: '#4ade80', fontWeight: 'bold' }}>
-                ✅ RUTA SEGURA (FUSIÓN D415 + TOPOGRAFÍA)
+              <span style={{ color: '#4ade80', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                <CheckCircle2 size={14} /> RUTA SEGURA
               </span>
               <span>
                 Distancia: <strong>{safeRoute.distanceMeters} m</strong>
@@ -631,17 +533,6 @@ export const TopographicMap2D: React.FC<TopographicMap2DProps> = ({
               <span>
                 Pendiente Máx: <strong>{safeRoute.maxSlopeDeg}°</strong>
               </span>
-              {droneData?.navigation && (
-                <span>
-                  Rumbo D415:{' '}
-                  <strong style={{ color: '#a3e635' }}>
-                    {droneData.navigation.recommended_heading_deg > 0
-                      ? `+${droneData.navigation.recommended_heading_deg}`
-                      : droneData.navigation.recommended_heading_deg}
-                    °
-                  </strong>
-                </span>
-              )}
             </div>
 
             <div
@@ -671,14 +562,25 @@ export const TopographicMap2D: React.FC<TopographicMap2DProps> = ({
                   {hoverInfo.d415Cell && (
                     <span>
                       {' '}
-                      • Celda `data/`: <strong>{hoverInfo.d415Cell}</strong>
+                      • Celda del grid:{' '}
+                      <span
+                        style={{
+                          display: 'inline-block',
+                          width: '8px',
+                          height: '8px',
+                          borderRadius: '50%',
+                          background: hoverInfo.d415Cell.color,
+                          marginRight: '4px',
+                        }}
+                      />
+                      <strong>{hoverInfo.d415Cell.label}</strong>
                     </span>
                   )}
                 </span>
               ) : (
                 <span>
                   Haz clic en cualquier punto del mapa para calcular la ruta segura evitando los
-                  obstáculos `BOULDER` y `CREVICE` del servidor
+                  obstáculos BOULDER y CREVICE del servidor
                 </span>
               )}
             </div>
@@ -700,13 +602,12 @@ export const TopographicMap2D: React.FC<TopographicMap2DProps> = ({
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                fontSize: '18px',
                 boxShadow: '0 2px 6px rgba(0,0,0,0.5)',
                 zIndex: 5,
                 padding: 0,
               }}
             >
-              🧑‍🚀
+              <HeartPulse size={18} color={showTelemetry ? '#ffffff' : '#0c4a6e'} />
             </button>
 
             {/* Ícono Ojo: recorre rápidamente las 4 vistas de capa real del mapa */}
@@ -726,13 +627,12 @@ export const TopographicMap2D: React.FC<TopographicMap2DProps> = ({
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                fontSize: '18px',
                 boxShadow: '0 2px 6px rgba(0,0,0,0.5)',
                 zIndex: 5,
                 padding: 0,
               }}
             >
-              👁️
+              <Eye size={18} color="#0c4a6e" />
             </button>
 
             {/* Panel flotante de Telemetría del traje EVA-01 */}
@@ -753,45 +653,26 @@ export const TopographicMap2D: React.FC<TopographicMap2DProps> = ({
                   boxShadow: '0 4px 14px rgba(0,0,0,0.6)',
                 }}
               >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                  <strong style={{ color: '#4ade80' }}>Telemetría del traje EVA-01</strong>
-                  <span style={{ fontSize: '12px' }}>
-                    📶 {isConnected ? '🟢' : '⚪'} 🔋
-                  </span>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '10px' }}>
+                  <div style={{ lineHeight: 1.3 }}>
+                    <div style={{ fontWeight: 'bold', color: '#f3f4f6' }}>Telemetría del traje</div>
+                    <div style={{ fontWeight: 'bold', color: '#f3f4f6' }}>EVA-01</div>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', paddingTop: '2px' }}>
+                    <BatteryIcon level={eva?.battery ?? 0} />
+                  </div>
                 </div>
                 {eva ? (
                   <>
-                    <TelemetryBar
-                      label="O2 en depósito"
-                      value={eva.suit_o2}
-                      unit="%"
-                      critical={THRESHOLDS.O2.CRITICAL}
-                      warning={THRESHOLDS.O2.WARNING}
-                    />
-                    <div style={{ marginBottom: '8px' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '3px' }}>
+                    <TelemetryBar label="O2 en depósito" value={eva.suit_o2} unit="%" />
+                    <div style={{ marginBottom: '10px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '2px' }}>
                         <span>Pulso cardiaco</span>
                         <strong style={{ color: '#f87171' }}>{eva.heart_rate} BPM</strong>
                       </div>
-                      <div style={{ display: 'flex', alignItems: 'flex-end', gap: '2px', height: '14px' }}>
-                        {Array.from({ length: 14 }).map((_, i) => {
-                          const h = 4 + Math.abs(Math.sin(i * 0.9 + eva.heart_rate)) * 10;
-                          return (
-                            <div
-                              key={i}
-                              style={{ width: '3px', height: `${h}px`, background: '#f87171', borderRadius: '1px' }}
-                            />
-                          );
-                        })}
-                      </div>
+                      <EcgLine />
                     </div>
-                    <TelemetryBar
-                      label="Batería"
-                      value={eva.battery}
-                      unit="%"
-                      critical={THRESHOLDS.BATTERY.CRITICAL}
-                      warning={THRESHOLDS.BATTERY.WARNING}
-                    />
+                    <TelemetryBar label="Batería" value={eva.battery} unit="%" />
                   </>
                 ) : (
                   <p style={{ color: '#6b7280', margin: 0 }}>Esperando telemetría de ESP32 #3...</p>
@@ -810,24 +691,34 @@ export const TopographicMap2D: React.FC<TopographicMap2DProps> = ({
                   fontWeight: 'bold',
                   fontSize: '12px',
                   padding: '6px 10px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
                 }}
               >
-                ⚠️ Obstáculos &amp; Pendientes
+                <AlertTriangle size={14} /> Obstáculos &amp; Pendientes
               </div>
+              <style>{`
+                @keyframes statusDotPulse {
+                  0% { transform: scale(1); opacity: 0.6; }
+                  100% { transform: scale(2.2); opacity: 0; }
+                }
+              `}</style>
               <div style={{ padding: '8px', display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '220px', overflowY: 'auto' }}>
                 {riskCards.map((c, i) => (
                   <div
                     key={i}
                     style={{
                       background: c.level === 'red' ? '#7f1d1d' : c.level === 'yellow' ? '#78350f' : '#14532d',
-                      border: `1px solid ${c.level === 'red' ? '#ef4444' : c.level === 'yellow' ? '#f59e0b' : '#22c55e'}`,
+                      border: `1px solid ${SEVERITY_COLOR[c.level]}`,
                       borderRadius: '6px',
                       padding: '8px 10px',
                       fontSize: '11px',
                     }}
                   >
-                    <div style={{ fontWeight: 'bold', marginBottom: '3px' }}>
-                      {c.level === 'red' ? '🔴' : c.level === 'yellow' ? '🟡' : '🟢'} {c.title}
+                    <div style={{ fontWeight: 'bold', marginBottom: '3px', display: 'flex', alignItems: 'center', gap: '7px' }}>
+                      <StatusDot level={c.level} />
+                      {c.title}
                     </div>
                     <div style={{ color: '#e5e7eb' }}>{c.text}</div>
                   </div>
@@ -837,7 +728,9 @@ export const TopographicMap2D: React.FC<TopographicMap2DProps> = ({
 
             <div style={{ background: '#111827', border: '1px solid #374151', borderRadius: '8px', padding: '10px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontSize: '12px', marginBottom: '6px' }}>
-                <strong style={{ color: '#38bdf8' }}>📈 Elevación</strong>
+                <strong style={{ color: '#38bdf8', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <TrendingUp size={14} /> Elevación
+                </strong>
                 <span style={{ color: '#9ca3af', fontSize: '11px' }}>
                   Pendiente máx: <strong style={{ color: '#fb923c' }}>{safeRoute.maxSlopeDeg}°</strong>
                 </span>
@@ -877,13 +770,6 @@ export const TopographicMap2D: React.FC<TopographicMap2DProps> = ({
           <span style={{ color: '#22c55e', fontWeight: 'bold' }}>
             ━━ Ruta Segura A* (Click en Mapa)
           </span>
-          <span style={{ color: '#a3e635', fontWeight: 'bold' }}>━━ Ruta A* Servidor D415</span>
-          <span style={{ color: '#38bdf8', fontWeight: 'bold' }}>
-            ┈┈ Ruta Dijkstra Servidor D415
-          </span>
-          <span style={{ color: '#fb923c', fontWeight: 'bold' }}>■ BOULDER (Roca D415)</span>
-          <span style={{ color: '#06b6d4', fontWeight: 'bold' }}>■ CREVICE (Grieta D415)</span>
-          <span style={{ color: '#d97706' }}>■ INFLATED (Margen D415)</span>
         </div>
       </div>
     </div>

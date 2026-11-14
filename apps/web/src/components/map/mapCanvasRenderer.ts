@@ -285,16 +285,11 @@ export function renderTopographicMapCanvas(params: MapCanvasRenderParams): void 
       if (!isD415Obstacle) ctx.setLineDash([3, 3]);
       ctx.arc(px, py, pr, 0, Math.PI * 2);
 
-      if (isD415Obstacle) {
-        const isCrevice = haz.kind === 'steep_cliff';
-        ctx.fillStyle = isCrevice ? 'rgba(6, 182, 212, 0.25)' : 'rgba(249, 115, 22, 0.28)';
-        ctx.strokeStyle = isCrevice ? '#38bdf8' : '#fb923c';
-        ctx.lineWidth = 1.8;
-      } else {
-        ctx.fillStyle = 'rgba(239, 68, 68, 0.22)';
-        ctx.strokeStyle = 'rgba(248, 113, 113, 0.85)';
-        ctx.lineWidth = 1.5;
-      }
+      // Cualquier complicación detectada (cráter de la foto o BOULDER/CREVICE de la D415)
+      // se marca igual: un círculo rojo de alerta.
+      ctx.fillStyle = 'rgba(239, 68, 68, 0.22)';
+      ctx.strokeStyle = 'rgba(248, 113, 113, 0.85)';
+      ctx.lineWidth = isD415Obstacle ? 1.8 : 1.5;
 
       ctx.fill();
       ctx.stroke();
@@ -384,25 +379,100 @@ export function renderTopographicMapCanvas(params: MapCanvasRenderParams): void 
     ctx.restore();
   }
 
+  type BadgeIcon = 'target' | 'home' | 'drone' | 'person';
+
+  const drawBadgeIcon = (kind: BadgeIcon, cx: number, cy: number, color: string) => {
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    ctx.lineWidth = 1.3;
+    ctx.lineCap = 'round';
+    switch (kind) {
+      case 'target':
+        ctx.beginPath();
+        ctx.arc(cx, cy, 5, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(cx, cy, 1.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(cx - 7, cy);
+        ctx.lineTo(cx - 3.5, cy);
+        ctx.moveTo(cx + 3.5, cy);
+        ctx.lineTo(cx + 7, cy);
+        ctx.moveTo(cx, cy - 7);
+        ctx.lineTo(cx, cy - 3.5);
+        ctx.moveTo(cx, cy + 3.5);
+        ctx.lineTo(cx, cy + 7);
+        ctx.stroke();
+        break;
+      case 'home':
+        ctx.beginPath();
+        ctx.moveTo(cx - 6, cy + 1);
+        ctx.lineTo(cx, cy - 6);
+        ctx.lineTo(cx + 6, cy + 1);
+        ctx.stroke();
+        ctx.strokeRect(cx - 4, cy + 1, 8, 5.5);
+        break;
+      case 'drone':
+        ctx.beginPath();
+        ctx.moveTo(cx - 6, cy - 6);
+        ctx.lineTo(cx + 6, cy + 6);
+        ctx.moveTo(cx + 6, cy - 6);
+        ctx.lineTo(cx - 6, cy + 6);
+        ctx.stroke();
+        [
+          [-6, -6],
+          [6, -6],
+          [-6, 6],
+          [6, 6],
+        ].forEach(([dx, dy]) => {
+          ctx.beginPath();
+          ctx.arc(cx + dx, cy + dy, 2, 0, Math.PI * 2);
+          ctx.stroke();
+        });
+        ctx.beginPath();
+        ctx.arc(cx, cy, 2, 0, Math.PI * 2);
+        ctx.fill();
+        break;
+      case 'person':
+        ctx.beginPath();
+        ctx.arc(cx, cy - 4, 2.6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(cx - 4, cy + 6);
+        ctx.quadraticCurveTo(cx, cy - 1, cx + 4, cy + 6);
+        ctx.stroke();
+        break;
+    }
+    ctx.restore();
+  };
+
   const drawBadge = (
     px: number,
     py: number,
     text: string,
     color: string,
-    offsetY: number = 0
+    offsetY: number = 0,
+    icon?: BadgeIcon
   ) => {
     ctx.save();
     ctx.font = 'bold 11px monospace';
     const textWidth = ctx.measureText(text).width;
-    const bx = Math.min(width - textWidth - 16, Math.max(6, px + 10));
+    const iconW = icon ? 16 : 0;
+    const boxW = textWidth + 10 + iconW;
+    const bx = Math.min(width - boxW - 6, Math.max(6, px + 10));
     const by = Math.min(height - 24, Math.max(6, py - 9 + offsetY));
     ctx.fillStyle = 'rgba(17, 24, 39, 0.88)';
-    ctx.fillRect(bx, by, textWidth + 10, 18);
+    ctx.fillRect(bx, by, boxW, 18);
     ctx.strokeStyle = color;
     ctx.lineWidth = 1;
-    ctx.strokeRect(bx, by, textWidth + 10, 18);
+    ctx.strokeRect(bx, by, boxW, 18);
+    if (icon) {
+      drawBadgeIcon(icon, bx + 9, by + 9, color);
+    }
     ctx.fillStyle = color;
-    ctx.fillText(text, bx + 5, by + 13);
+    ctx.fillText(text, bx + 5 + iconW, by + 13);
     ctx.restore();
   };
 
@@ -424,7 +494,7 @@ export function renderTopographicMapCanvas(params: MapCanvasRenderParams): void 
   ctx.fillStyle = '#22c55e';
   ctx.fill();
   ctx.restore();
-  drawBadge(targetPx, targetPy, `🎯 META [${endPt[0]}, ${endPt[1]}]`, '#4ade80');
+  drawBadge(targetPx, targetPy, `META [${endPt[0]}, ${endPt[1]}]`, '#4ade80', 0, 'target');
 
   const basePx = (basePos[0] / dataset.widthMeters) * width;
   const basePy = (basePos[1] / dataset.heightMeters) * height;
@@ -435,7 +505,7 @@ export function renderTopographicMapCanvas(params: MapCanvasRenderParams): void 
   ctx.fillRect(basePx - 7, basePy - 7, 14, 14);
   ctx.strokeRect(basePx - 7, basePy - 7, 14, 14);
   ctx.restore();
-  drawBadge(basePx - 36, basePy + 22, '🏠 BASE', '#fef08a');
+  drawBadge(basePx - 36, basePy + 22, 'BASE', '#fef08a', 0, 'home');
 
   ctx.save();
   ctx.beginPath();
@@ -449,8 +519,10 @@ export function renderTopographicMapCanvas(params: MapCanvasRenderParams): void 
   drawBadge(
     dronePx - 20,
     dronePy - 22,
-    `🚁 D415 / DRON (Alt Z: ${dataset.dronePos[2]}m)`,
-    '#e9d5ff'
+    `D415 / DRON (Alt Z: ${dataset.dronePos[2]}m)`,
+    '#e9d5ff',
+    0,
+    'drone'
   );
 
   const evaPx = (evaPos[0] / dataset.widthMeters) * width;
@@ -464,6 +536,6 @@ export function renderTopographicMapCanvas(params: MapCanvasRenderParams): void 
   ctx.strokeStyle = '#ffffff';
   ctx.stroke();
   ctx.restore();
-  drawBadge(evaPx, evaPy + 6, '👨‍🚀 EVA (Alan)', '#7dd3fc');
+  drawBadge(evaPx, evaPy + 6, 'EVA (Alan)', '#7dd3fc', 0, 'person');
 }
 
