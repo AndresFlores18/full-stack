@@ -10,6 +10,7 @@ import {
   BerniTopographyInput,
   buildTopographicDataset,
   CONNECTION_MODES,
+  FIXED_DRONE_PAD_POS,
   OperationMode,
 } from './config/connectionConfig';
 import { TopographicMap2D } from './components/TopographicMap2D';
@@ -26,24 +27,23 @@ export default function App() {
   const [contourStep, setContourStep] = useState<number>(1.5);
   const [showRawJson, setShowRawJson] = useState<boolean>(false);
 
-  // 2. Generador / Simulador manual del Dataset de Berni
+  // 2. Generador / Simulador manual del Dataset de Berni (Dron fijo en X/Y; solo sube en Z, escanea y baja)
   const [useManualBerniOverride, setUseManualBerniOverride] = useState<boolean>(false);
   const [manualBerniData, setManualBerniData] = useState<BerniTopographyInput>({
-    drone_pos: [1.8, 1.4, 1.6],
+    drone_pos: [FIXED_DRONE_PAD_POS[0], FIXED_DRONE_PAD_POS[1], 2.2],
     safe_path: true,
-    max_slope_deg: 14.2,
+    max_slope_deg: 12.5,
     obstacles: [
-      { x: 1.4, y: 2.1, radius: 0.35, severity: 'medium' },
-      { x: 2.6, y: 1.5, radius: 0.45, severity: 'high' },
+      { x: 1.7, y: 2.0, radius: 0.30, severity: 'medium' },
+      { x: 2.3, y: 1.4, radius: 0.35, severity: 'high' },
     ],
-    elevation_points: [{ x: 5.5, y: 4.8, z: 6.5 }],
+    elevation_points: [{ x: 5.5, y: 4.8, z: 4.0 }],
   });
 
   useEffect(() => {
     connectBackbone(customUrls[mode]);
   }, []);
 
-  // Cambiar entre Modo Local (ESP32) y Modo En Línea (Raspberry Pi)
   const handleSwitchMode = (newMode: OperationMode) => {
     setMode(newMode);
     setBackboneUrl(customUrls[newMode]);
@@ -58,14 +58,13 @@ export default function App() {
   const station = getStation();
   const satellite = getSatellite();
 
-  // Fuente activa para el mapa topográfico: o el stream en vivo de Berni, o el generador manual de prueba
   const activeDroneSource = useManualBerniOverride ? manualBerniData : drone?.data;
   const terrainDataset = buildTopographicDataset(activeDroneSource, contourStep);
 
   const risk = evaluateRisk(eva?.data, activeDroneSource as any);
   const activeModeConfig = CONNECTION_MODES[mode];
 
-  const customPeak = manualBerniData.elevation_points?.[0] ?? { x: 5.5, y: 4.8, z: 6.5 };
+  const customPeak = manualBerniData.elevation_points?.[0] ?? { x: 5.5, y: 4.8, z: 4.0 };
 
   return (
     <div style={{ padding: '20px', fontFamily: 'monospace', color: '#f3f4f6', maxWidth: '1440px', margin: '0 auto' }}>
@@ -211,7 +210,7 @@ export default function App() {
         )}
       </div>
 
-      {/* VISTA LADO A LADO: MAPA TOPOGRÁFICO 2D (IZQUIERDA) + CONTROLES Y SLIDERS DE BERNI (DERECHA) */}
+      {/* VISTA LADO A LADO: MAPA TOPOGRÁFICO 2D (IZQUIERDA) + CONTROL VERTICAL DEL DRON BERNI (DERECHA) */}
       <div
         style={{
           display: 'grid',
@@ -229,7 +228,7 @@ export default function App() {
           evaYaw={eva?.data?.imu?.yaw ?? 0}
         />
 
-        {/* Columna Derecha: Controles en Vivo y Configurador del Dataset de Berni */}
+        {/* Columna Derecha: Control Vertical del Dron (Subir, Escanear y Bajar) + Dataset */}
         <div
           style={{
             background: '#111827',
@@ -239,16 +238,34 @@ export default function App() {
             display: 'flex',
             flexDirection: 'column',
             justifyContent: 'space-between',
-             gap: '12px',
+            gap: '12px',
           }}
         >
           <div>
             <h3 style={{ margin: '0 0 6px 0', color: '#a855f7', fontSize: '16px' }}>
-              ⚙️ Control de Topografía y Dataset (Berni)
+              🚁 Escaneo Vertical Dron (Berni)
             </h3>
             <p style={{ margin: '0 0 12px 0', fontSize: '12px', color: '#9ca3af' }}>
-              Ajusta las curvas de nivel o mueve los sliders para ver el cambio directo en el mapa de al lado.
+              El dron no se desplaza en X/Y: <strong>solo sube en Z, escanea el terreno y baja</strong>.
             </p>
+
+            {/* Estado actual del vuelo vertical */}
+            <div
+              style={{
+                background: '#030712',
+                border: '1px solid #374151',
+                borderRadius: '6px',
+                padding: '8px 10px',
+                marginBottom: '12px',
+                fontSize: '12px',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <span>Fase Dron:</span>
+              <strong style={{ color: '#c084fc' }}>{terrainDataset.droneFlightPhase}</strong>
+            </div>
 
             {/* Selector de densidad de curvas */}
             <div style={{ marginBottom: '12px' }}>
@@ -275,7 +292,6 @@ export default function App() {
               </select>
             </div>
 
-            {/* Botón para alternar entre Stream en Vivo vs Generador Manual */}
             <button
               onClick={() => setUseManualBerniOverride(!useManualBerniOverride)}
               style={{
@@ -294,77 +310,98 @@ export default function App() {
             >
               {useManualBerniOverride
                 ? '🧪 Modo Manual Activo (Sliders)'
-                : '📡 Stream en Vivo (Click para probar Sliders)'}
+                : '📡 Stream en Vivo (Click para controlar altura Z)'}
             </button>
 
-            {/* Sliders siempre visibles al lado del mapa para mover en tiempo real */}
+            {/* Controles de Altitud Z (Subir / Escanear / Bajar) */}
             <div
               style={{
                 background: '#1f2937',
                 padding: '12px',
                 borderRadius: '8px',
-                opacity: useManualBerniOverride ? 1 : 0.65,
+                opacity: useManualBerniOverride ? 1 : 0.75,
                 display: 'flex',
                 flexDirection: 'column',
-                gap: '10px',
+                gap: '12px',
                 fontSize: '12px',
               }}
             >
               <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>Posición Dron X:</span>
-                  <strong>{manualBerniData.drone_pos[0]} m</strong>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                  <span>⬆️ Altitud Dron (Z - Subir/Bajar):</span>
+                  <strong style={{ color: '#c084fc' }}>{terrainDataset.dronePos[2]} m</strong>
                 </div>
                 <input
                   type="range"
-                  min={0.5}
-                  max={4.0}
+                  min={0.0}
+                  max={3.0}
                   step={0.1}
-                  value={manualBerniData.drone_pos[0]}
+                  value={manualBerniData.drone_pos[2]}
                   onChange={(e) => {
                     setUseManualBerniOverride(true);
                     setManualBerniData({
                       ...manualBerniData,
                       drone_pos: [
+                        FIXED_DRONE_PAD_POS[0],
+                        FIXED_DRONE_PAD_POS[1],
                         Number(e.target.value),
-                        manualBerniData.drone_pos[1],
-                        manualBerniData.drone_pos[2],
                       ],
                     });
                   }}
                   style={{ width: '100%' }}
                 />
-              </div>
-
-              <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>Posición Dron Y:</span>
-                  <strong>{manualBerniData.drone_pos[1]} m</strong>
+                <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
+                  <button
+                    onClick={() => {
+                      setUseManualBerniOverride(true);
+                      setManualBerniData({
+                        ...manualBerniData,
+                        drone_pos: [FIXED_DRONE_PAD_POS[0], FIXED_DRONE_PAD_POS[1], 0.1],
+                      });
+                    }}
+                    style={{
+                      flex: 1,
+                      background: '#374151',
+                      color: '#e5e7eb',
+                      border: 'none',
+                      borderRadius: '4px',
+                      padding: '5px',
+                      cursor: 'pointer',
+                      fontFamily: 'monospace',
+                      fontSize: '11px',
+                    }}
+                  >
+                    ⬇️ Bajar (0.1m)
+                  </button>
+                  <button
+                    onClick={() => {
+                      setUseManualBerniOverride(true);
+                      setManualBerniData({
+                        ...manualBerniData,
+                        drone_pos: [FIXED_DRONE_PAD_POS[0], FIXED_DRONE_PAD_POS[1], 2.6],
+                      });
+                    }}
+                    style={{
+                      flex: 1,
+                      background: '#6b21a8',
+                      color: '#f3e8ff',
+                      border: 'none',
+                      borderRadius: '4px',
+                      padding: '5px',
+                      cursor: 'pointer',
+                      fontFamily: 'monospace',
+                      fontSize: '11px',
+                      fontWeight: 'bold',
+                    }}
+                  >
+                    ⬆️ Subir y Escanear (2.6m)
+                  </button>
                 </div>
-                <input
-                  type="range"
-                  min={0.5}
-                  max={4.0}
-                  step={0.1}
-                  value={manualBerniData.drone_pos[1]}
-                  onChange={(e) => {
-                    setUseManualBerniOverride(true);
-                    setManualBerniData({
-                      ...manualBerniData,
-                      drone_pos: [
-                        manualBerniData.drone_pos[0],
-                        Number(e.target.value),
-                        manualBerniData.drone_pos[2],
-                      ],
-                    });
-                  }}
-                  style={{ width: '100%' }}
-                />
               </div>
 
               <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>Altura / Relieve D415 (Z):</span>
+                  <span>Relieve detectado D415:</span>
                   <strong style={{ color: '#fb923c' }}>{customPeak.z} m</strong>
                 </div>
                 <input
@@ -377,31 +414,7 @@ export default function App() {
                     setUseManualBerniOverride(true);
                     setManualBerniData({
                       ...manualBerniData,
-                      elevation_points: [
-                        { ...customPeak, z: Number(e.target.value) },
-                      ],
-                    });
-                  }}
-                  style={{ width: '100%' }}
-                />
-              </div>
-
-              <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>Pendiente Máx Terreno:</span>
-                  <strong>{manualBerniData.max_slope_deg}°</strong>
-                </div>
-                <input
-                  type="range"
-                  min={0}
-                  max={35}
-                  step={0.5}
-                  value={manualBerniData.max_slope_deg}
-                  onChange={(e) => {
-                    setUseManualBerniOverride(true);
-                    setManualBerniData({
-                      ...manualBerniData,
-                      max_slope_deg: Number(e.target.value),
+                      elevation_points: [{ ...customPeak, z: Number(e.target.value) }],
                     });
                   }}
                   style={{ width: '100%' }}
@@ -420,7 +433,7 @@ export default function App() {
                     });
                   }}
                 />
-                <span>Ruta Segura (`safe_path`)</span>
+                <span>Ruta despejada según Dron (`safe_path`)</span>
               </label>
             </div>
           </div>
@@ -454,7 +467,7 @@ export default function App() {
                   borderRadius: '6px',
                   padding: '8px',
                   fontSize: '10px',
-                  maxHeight: '150px',
+                  maxHeight: '140px',
                   overflowY: 'auto',
                   color: '#d1d5db',
                 }}
@@ -499,7 +512,7 @@ export default function App() {
           </div>
           {drone ? (
             <div style={{ marginTop: '12px', fontSize: '14px', lineHeight: 1.6 }}>
-              <div>Posición [x, y, z]: <strong>[{drone.data.drone_pos.join(', ')}]</strong></div>
+              <div>Altitud Escaneo Z: <strong>{drone.data.drone_pos[2]} m</strong> ({terrainDataset.droneFlightPhase})</div>
               <div>Ruta segura: <strong style={{ color: drone.data.safe_path ? '#22c55e' : '#ef4444' }}>{drone.data.safe_path ? 'SÍ (DESPEJADO)' : 'NO (BLOQUEO)'}</strong></div>
               <div>Pendiente Máx: <strong>{drone.data.max_slope_deg}°</strong></div>
               <div>Obstáculos detectados: <strong>{drone.data.obstacles.length}</strong></div>

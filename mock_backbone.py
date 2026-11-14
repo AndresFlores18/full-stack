@@ -157,27 +157,29 @@ async def telemetry_broadcaster():
         }
 
         # 4. Dron Real CV (Raspberry Pi 4 + RealSense D415)
+        # El dron NO se mueve en X/Y; permanece en su plataforma fija [1.8, 5.4] y solo sube en Z, escanea y baja.
         is_safe = False if (step % 20 > 14) else True
+        drone_z = round(max(0.1, 1.3 + 1.3 * math.sin(t * 0.35)), 2)
         drone_packet = {
             "node_id": "drone_cv",
             "timestamp": now_sec,
             "payload": {
                 "drone_cv": {
                     "drone_pos": [
-                        round(1.2 + 0.8 * math.cos(t * 0.2), 2),
-                        round(0.8 + 0.8 * math.sin(t * 0.2), 2),
-                        round(1.5 + 0.2 * math.sin(t * 0.5), 2)
+                        1.8,
+                        5.4,
+                        drone_z
                     ],
                     "safe_path": is_safe,
-                    "max_slope_deg": round(14.5 + (12.0 if not is_safe else 3.0 * math.sin(t * 0.3)), 1),
+                    "max_slope_deg": round(12.5 + (10.0 if not is_safe else 2.5 * math.sin(t * 0.3)), 1),
                     "imu": {
-                        "yaw": round(0.4 + 5 * math.sin(t * 0.1), 1),
-                        "pitch": round(2.1 + 3 * math.cos(t * 0.2), 1),
-                        "roll": round(-0.3 + 2 * math.sin(t * 0.3), 1)
+                        "yaw": round(0.4 + 2 * math.sin(t * 0.1), 1),
+                        "pitch": round(1.1 + 1.5 * math.cos(t * 0.2), 1),
+                        "roll": round(-0.2 + 1.0 * math.sin(t * 0.3), 1)
                     },
                     "obstacles": [
-                        {"x": 1.4, "y": 2.1, "radius": 0.35, "severity": "high" if not is_safe else "medium"},
-                        {"x": 2.2, "y": 1.1, "radius": 0.20, "severity": "low"}
+                        {"x": 1.7, "y": 2.0, "radius": 0.30, "severity": "high" if not is_safe else "medium"},
+                        {"x": 2.3, "y": 1.4, "radius": 0.25, "severity": "low"}
                     ]
                 }
             }
